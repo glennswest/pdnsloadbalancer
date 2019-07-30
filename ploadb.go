@@ -1,44 +1,52 @@
 package main
 
 //import "github.com/tidwall/sjson"
+import "github.com/tidwall/gjson"
 import "github.com/go-resty/resty"
 import "fmt"
 
-func main(){
-var rrsets = `
-{
-  "rrsets": [{
-    "changetype": "replace",
-    {
-      "comments": [],
-      "name": "api-int.gw.lo.",
-      "records": [
-        {
-          "content": "192.168.1.200",
-          "disabled": true
-        },
-        {
-          "content": "192.168.1.201",
-          "disabled": false
-        },
-        {
-          "content": "192.168.1.203",
-          "disabled": false
-        },
-        {
-          "content": "192.168.1.202",
-          "disabled": false
-        }
-      ],
-      "ttl": 86400,
-      "type": "A"
-    }
-  ]
- ]
+func getdomain(domain string) string{
+      // Create a Resty Client
+       client := resty.New()
+       resp, _ := client.R().
+           SetHeaders(map[string]string{
+                      "Content-Type": "application/json",
+                       "X-API-KEY": "Secret2018"}).
+           Get("http://ctl.gw.lo:8081/api/v1/servers/localhost/zones/" + domain)
+        // Explore response object
+        /*
+        fmt.Println("Response Info:")
+        fmt.Println("Error      :", err)
+        fmt.Println("Status Code:", resp.StatusCode())
+        fmt.Println("Status     :", resp.Status())
+        fmt.Println("Time       :", resp.Time())
+        fmt.Println("Received At:", resp.ReceivedAt())
+        fmt.Println("Body       :\n", resp)
+        fmt.Println()
+        */
+
+        return(resp.String())
 }
-`
+
+
+
+func main(){
 
         domain := "gw.lo."
+        data := getdomain(domain)
+        //fmt.Printf(result)
+        rrsets := gjson.Get(data,"rrsets").Array()
+        //fmt.Printf(rrsets.String())
+        for _,element := range rrsets{
+             //fmt.Printf("-> \n %s\n <-\n",element.String())
+             thetype := gjson.Get(element.String(),"type")
+             fmt.Printf(thetype.String())
+             }
+        //gjson.ForEachLine(rrsets, func(line gjson.Result) bool{
+        //     records := gjson.Get(line.String(),"records")
+        //     fmt.Printf("Type: %s Cnt = %d\n",thetype.String(), len(records.Array()))
+        //     return true
+        //     })
 /*
         hostname := "api.gw.lo"
         ipaddr   := "192.168.1.200"
@@ -52,6 +60,7 @@ var rrsets = `
        
         value, _ = sjson.SetRaw("","rrsets.0",value)
 */
+/*
        
         value := rrsets
 	println(value)
@@ -73,6 +82,7 @@ var rrsets = `
 	fmt.Println("Received At:", resp.ReceivedAt())
 	fmt.Println("Body       :\n", resp)
 	fmt.Println()
+*/
 
 }
 

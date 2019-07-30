@@ -1,28 +1,45 @@
 package main
 
-import "github.com/tidwall/sjson"
+//import "github.com/tidwall/sjson"
 import "github.com/go-resty/resty"
 import "fmt"
 
 func main(){
-var rrset1 = `{
-            "changetype": "replace",
-            "name": "zonename",
-            "type": "A",
-            "ttl": 3600,
-            "records": [
-                {
-                    "name":   "api.gw.lo.",
-                    "comments": "[]",
-                    "records": [{
-                      "content":   "192.168.1.200",
-                      "disabled": "false"
-                      }]
-                }
-            ]
-        }`
+var rrsets = `
+{
+  "rrsets": [{
+    "changetype": "replace",
+    {
+      "comments": [],
+      "name": "api-int.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.200",
+          "disabled": true
+        },
+        {
+          "content": "192.168.1.201",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.203",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.202",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    }
+  ]
+ ]
+}
+`
 
         domain := "gw.lo."
+/*
         hostname := "api.gw.lo"
         ipaddr   := "192.168.1.200"
         state    := "true"
@@ -34,6 +51,9 @@ var rrset1 = `{
         value, _ = sjson.Set(value, "records.0.records.0.disabled",state)
        
         value, _ = sjson.SetRaw("","rrsets.0",value)
+*/
+       
+        value := rrsets
 	println(value)
 
         // Create a Resty Client

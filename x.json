@@ -1,0 +1,29 @@
+{
+  "rrsets": [
+    {
+      "changetype": "replace",
+      "comments": [],
+      "name": "api-int.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.200",
+          "disabled": true
+        },
+        {
+          "content": "192.168.1.201",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.203",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.202",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    }
+  ]
+}

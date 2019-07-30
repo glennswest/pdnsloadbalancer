@@ -1,0 +1,14 @@
+{"rrsets": [{
+            "changetype": "replace",
+            "name": gw.lo,
+            "type": 'A',
+            "ttl": 3600,
+            "records": [
+                {"disabled":"True",
+                    "content": "192.168.1.200",
+                    "name":   api.gw.lo,
+                    "disabled": "False"
+                }
+            ]
+        }]}
+

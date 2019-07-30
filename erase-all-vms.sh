@@ -5,4 +5,5 @@
 ./erasedisk.sh worker-0.gw.lo
 ./erasedisk.sh worker-1.gw.lo
 ./erasedisk.sh worker-2.gw.lo
+./erasewindisk.sh winnode-0.gw.lo
 

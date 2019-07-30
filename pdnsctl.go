@@ -8,26 +8,30 @@ func main(){
 var rrset1 = `{
             "changetype": "replace",
             "name": "zonename",
-            "type": 'A',
+            "type": "A",
             "ttl": 3600,
             "records": [
                 {
-                    "content": "something.com",
-                    "name":   "192.168.1.200",
-                    "disabled": "False"
+                    "name":   "api.gw.lo.",
+                    "comments": "[]",
+                    "records": [{
+                      "content":   "192.168.1.200",
+                      "disabled": "false"
+                      }]
                 }
             ]
         }`
 
-        domain := "gw.lo"
+        domain := "gw.lo."
         hostname := "api.gw.lo"
         ipaddr   := "192.168.1.200"
-        state    := "True"
+        state    := "true"
         value := rrset1;
-	value, _ = sjson.SetRaw(value, "name", domain)
-        value, _ = sjson.SetRaw(value, "records.0.name",hostname)
-        value, _ = sjson.Set(value, "records.0.content",ipaddr)
-        value, _ = sjson.Set(value, "records.0.disabled",state)
+	value, _ = sjson.Set(value, "name", domain)
+        value, _ = sjson.Set(value, "records.0.name",hostname)
+        value, _ = sjson.SetRaw(value, "records.0.comments","[]")
+        value, _ = sjson.Set(value, "records.0.records.0.content",ipaddr)
+        value, _ = sjson.Set(value, "records.0.records.0.disabled",state)
        
         value, _ = sjson.SetRaw("","rrsets.0",value)
 	println(value)
@@ -38,7 +42,7 @@ var rrset1 = `{
            SetHeaders(map[string]string{
                       "Content-Type": "application/json",
                        "X-API-KEY": "Secret2018"}).
-           SetBody([]byte(value)).
+           SetBody(value).
            Patch("http://ctl.gw.lo:8081/api/v1/servers/localhost/zones/" + domain)
 	// Explore response object
 	fmt.Println("Response Info:")
@@ -60,4 +64,27 @@ var rrset1 = `{
             headers={'content-type': 'application/json'})
 */
 
+/*
+   {
+      "comments": [],
+      "name": "api.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.201",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.202",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.200",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.203",
+          "disabled": false
+        }
+
+*/
 

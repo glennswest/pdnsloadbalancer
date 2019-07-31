@@ -52,7 +52,6 @@ func ReadConfig() Config {
                 return MyConfig
 	}
 	//log.Print(MyConfig.Index)
-        log.Printf("URL: %s\n",MyConfig.Baseurl)
 	return MyConfig
 }
 
@@ -100,7 +99,7 @@ func getdomain(domain string) string{
        resp, _ := client.R().
            SetHeaders(map[string]string{
                       "Content-Type": "application/json",
-                       "X-API-KEY": "Secret2018"}).
+                       "X-API-KEY": MyConfig.ApiPassword}).
            Get("/api/v1/servers/localhost/zones/" + domain)
         // Explore response object
         /*
@@ -124,7 +123,7 @@ func getdomainlist() string{
        resp, _ := client.R().
            SetHeaders(map[string]string{
                       "Content-Type": "application/json",
-                       "X-API-KEY": "Secret2018"}).
+                       "X-API-KEY": MyConfig.ApiPassword}).
            Get("/api/v1/servers/localhost/zones")
         // Explore response object
         /*
@@ -193,7 +192,7 @@ func send_update(domain string,name string,records string) string{
        resp, _ := client.R().
            SetHeaders(map[string]string{
                       "Content-Type": "application/json",
-                       "X-API-KEY": "Secret2018"}).
+                       "X-API-KEY": MyConfig.ApiPassword}).
            SetBody(data).
            Patch("/api/v1/servers/localhost/zones/" + domain)
         // Explore response object

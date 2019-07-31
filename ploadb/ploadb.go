@@ -95,11 +95,12 @@ func main() {
 func getdomain(domain string) string{
       // Create a Resty Client
        client := resty.New()
+       client.SetHostURL(MyConfig.Baseurl)
        resp, _ := client.R().
            SetHeaders(map[string]string{
                       "Content-Type": "application/json",
                        "X-API-KEY": "Secret2018"}).
-           Get("http://ctl.gw.lo:8081/api/v1/servers/localhost/zones/" + domain)
+           Get("/api/v1/servers/localhost/zones/" + domain)
         // Explore response object
         /*
         fmt.Println("Response Info:")
@@ -118,11 +119,12 @@ func getdomain(domain string) string{
 func getdomainlist() string{
       // Create a Resty Client
        client := resty.New()
+       client.SetHostURL(MyConfig.Baseurl)
        resp, _ := client.R().
            SetHeaders(map[string]string{
                       "Content-Type": "application/json",
                        "X-API-KEY": "Secret2018"}).
-           Get("http://ctl.gw.lo:8081/api/v1/servers/localhost/zones")
+           Get("/api/v1/servers/localhost/zones")
         // Explore response object
         /*
         fmt.Println("Response Info:")
@@ -186,12 +188,13 @@ func send_update(domain string,name string,records string) string{
        data, _ = sjson.Set(data,"rrsets.0.changetype", "replace")
        //fmt.Printf("send_update: %s\n",data)
        client := resty.New()
+       client.SetHostURL(MyConfig.Baseurl)
        resp, _ := client.R().
            SetHeaders(map[string]string{
                       "Content-Type": "application/json",
                        "X-API-KEY": "Secret2018"}).
            SetBody(data).
-           Patch("http://ctl.gw.lo:8081/api/v1/servers/localhost/zones/" + domain)
+           Patch("/api/v1/servers/localhost/zones/" + domain)
         // Explore response object
         /*
         fmt.Println("Response Info:")

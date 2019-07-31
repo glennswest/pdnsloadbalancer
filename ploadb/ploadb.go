@@ -11,6 +11,7 @@ import "strconv"
 import "log"
 import "gopkg.in/natefinch/lumberjack.v2"
 import "github.com/kardianos/service"
+import "github.com/BurntSushi/toml"
  
 
 type program struct{}
@@ -27,6 +28,33 @@ func (p *program) Stop(s service.Service) error {
 	// Stop should not block. Return with a few seconds.
 	return nil
 }
+
+// Info from config file
+type Config struct {
+	Baseurl     string
+	ApiPassword string
+}
+
+var MyConfig Config
+
+// Reads info from config file
+func ReadConfig() Config {
+	var configfile = "/etc/ploadb.conf"
+	_, err := os.Stat(configfile)
+	if err != nil {
+		log.Printf("Config file is missing: ", configfile)
+                return MyConfig
+	}
+
+	if _, err := toml.DecodeFile(configfile, &MyConfig); err != nil {
+		log.Printf("Cannot Decode Config file %v\n",err)
+                return MyConfig
+	}
+	//log.Print(MyConfig.Index)
+        log.Printf("URL: %s\n",MyConfig.Baseurl)
+	return MyConfig
+}
+
 
 func main() {
 	// Start should not block. Do the actual work async.
@@ -182,6 +210,7 @@ func send_update(domain string,name string,records string) string{
 
 func DoWork(){
 
+        ReadConfig()
         domainsjs := getdomainlist()
         domains := gjson.Parse(domainsjs).Array()
         for _,domain := range domains{

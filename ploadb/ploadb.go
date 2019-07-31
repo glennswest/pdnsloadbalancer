@@ -17,12 +17,13 @@ import "github.com/BurntSushi/toml"
 type program struct{}
 
 func (p *program) Start(s service.Service) error {
+        ReadConfig()
 	go p.run()
 	return nil
 }
 func (p *program) run() {
 	// Do work here
-        DoWork()
+        go DoWork()
 }
 func (p *program) Stop(s service.Service) error {
 	// Stop should not block. Return with a few seconds.
@@ -213,12 +214,14 @@ func send_update(domain string,name string,records string) string{
 
 func DoWork(){
 
-        ReadConfig()
+     for {
         domainsjs := getdomainlist()
         domains := gjson.Parse(domainsjs).Array()
         for _,domain := range domains{
               process_domain(domain.String())
               }
+       time.Sleep(20 * time.Second)
+        }
 }
 
 func process_domain(domain string){

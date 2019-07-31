@@ -3,9 +3,11 @@ package main
 import "github.com/tidwall/sjson"
 import "github.com/tidwall/gjson"
 import "github.com/go-resty/resty"
-import "fmt"
+//import "fmt"
 import "time"
 import ping "github.com/sparrc/go-ping"
+import "strconv"
+import "log"
 
 
 func getdomain(domain string) string{
@@ -32,16 +34,13 @@ func getdomain(domain string) string{
 }
 
 
-func handle_load_balance(name string,count int,records string){
+func handle_load_balance(domain string,name string,count int,records string){
 
        pger := []*ping.Pinger{}
-       fmt.Printf("%s -  %d\n",name,count)
-       fmt.Printf("%s\n",records)
        recs := gjson.Get(records,"records")
        for _,host := range(recs.Array()){
              ipa := gjson.Get(host.String(),"content")
              ip := ipa.String()
-             fmt.Printf("ip = %s\n",ip)
              pg, _ := ping.NewPinger(ip)
              pg.SetPrivileged(true)
              pg.Count = 3
@@ -53,25 +52,57 @@ func handle_load_balance(name string,count int,records string){
        for idx,_ := range(recs.Array()){
            pg := pger[idx]
            stats := pg.Statistics
-           fmt.Printf("%s -> %d packs transmitted - %d packets Received \n",stats().Addr,stats().PacketsSent,stats().PacketsRecv)
-           cstate := gjson.Get(records,"records." + string(idx) + ".disabled").String()
+           //fmt.Printf("%s -> %d packs transmitted - %d packets Received \n",stats().Addr,stats().PacketsSent,stats().PacketsRecv)
+           dsname := "records." + strconv.Itoa(idx) + ".disabled"
+           cstate := gjson.Get(records,dsname).String()
            if (stats().PacketsRecv > 0){
               if (cstate == "true"){
+                 log.Printf("%s - %s changed state to %s",name,stats().Addr,cstate)
                  changed = true
                  }
-              sjson.Set(records,"records." + string(idx) + ".disabled","false")
+              records, _ = sjson.SetRaw(records,dsname,"false")
             } else {
               if (cstate == "false"){
+                 log.Printf("%s - %s changed state to %s",name,stats().Addr,cstate)
                  changed = true
                  }
-              sjson.Set(records,"records." + string(idx) + ".disabled","true")
+              records, _ = sjson.SetRaw(records,dsname,"true")
            }
         }
        
         if (changed == true){
-           fmt.Printf("State Changed - Send Update\n")
+           send_update(domain,name,records)
            }
 }
+
+func send_update(domain string,name string,records string) string{
+// Create a Resty Client
+       data, _  := sjson.SetRaw("","rrsets.0",records)
+       data, _ = sjson.Set(data,"rrsets.0.changetype", "replace")
+       //fmt.Printf("send_update: %s\n",data)
+       client := resty.New()
+       resp, _ := client.R().
+           SetHeaders(map[string]string{
+                      "Content-Type": "application/json",
+                       "X-API-KEY": "Secret2018"}).
+           SetBody(data).
+           Patch("http://ctl.gw.lo:8081/api/v1/servers/localhost/zones/" + domain)
+        // Explore response object
+        /*
+        fmt.Println("Response Info:")
+        fmt.Println("Error      :", err)
+        fmt.Println("Status Code:", resp.StatusCode())
+        fmt.Println("Status     :", resp.Status())
+        fmt.Println("Time       :", resp.Time())
+        fmt.Println("Received At:", resp.ReceivedAt())
+        fmt.Println("Body       :\n", resp)
+        fmt.Println()
+        */
+        return(resp.String())
+
+
+}
+
 func main(){
 
         for true {
@@ -92,7 +123,7 @@ func process_domain(domain string){
              entries := gjson.Get(element.String(),"records")
              cnt := len(entries.Array())
              if cnt > 1 && thetype != "" && thetype == "A"{
-                handle_load_balance(thename,cnt,element.String())
+                go handle_load_balance(domain,thename,cnt,element.String())
                 }
              }
 }

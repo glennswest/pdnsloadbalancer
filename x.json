@@ -7,7 +7,7 @@
       "records": [
         {
           "content": "192.168.1.200",
-          "disabled": true
+          "disabled": false
         },
         {
           "content": "192.168.1.201",

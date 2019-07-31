@@ -1,0 +1,327 @@
+{
+  "account": "",
+  "api_rectify": false,
+  "dnssec": false,
+  "id": "gw.lo.",
+  "kind": "Master",
+  "last_check": 0,
+  "masters": [],
+  "name": "gw.lo.",
+  "notified_serial": 0,
+  "nsec3narrow": false,
+  "nsec3param": "",
+  "rrsets": [
+    {
+      "comments": [],
+      "name": "dev.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.151",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "api-int.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.200",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.203",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.201",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.202",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "tftp.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.250",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "*.app.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.204",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "_etcd-server-ssl._tcp.gw.lo.",
+      "records": [
+        {
+          "content": "1 1 2380 control-plane-0.gw.lo.",
+          "disabled": false
+        },
+        {
+          "content": "1 1 2380 control-plane-1.gw.lo.",
+          "disabled": false
+        },
+        {
+          "content": "1 1 2380 control-plane-2.gw.lo.",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "SRV"
+    },
+    {
+      "comments": [],
+      "name": "bootstrap.gw.lo.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.200",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "ctl.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.152",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "esxi.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.150",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "api.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.201",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.202",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.200",
+          "disabled": false
+        },
+        {
+          "content": "192.168.1.203",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "store.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.250",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "worker-2.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.206",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "control-plane-2.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.203",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "etcd-2.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.203",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "ns1.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.251",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "worker-1.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.205",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "control-plane-1.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.202",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "etcd-1.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.202",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "worker-0.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.204",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "bootstrap-0.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.200",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "control-plane-0.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.201",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "etcd-0.gw.lo.",
+      "records": [
+        {
+          "content": "192.168.1.201",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "A"
+    },
+    {
+      "comments": [],
+      "name": "gw.lo.",
+      "records": [
+        {
+          "content": "ns1.gw.lo. server.gw.lo. 2019073000 28800 7200 604800 86400",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "SOA"
+    },
+    {
+      "comments": [],
+      "name": "gw.lo.",
+      "records": [
+        {
+          "content": "ns1.gw.lo.",
+          "disabled": false
+        }
+      ],
+      "ttl": 86400,
+      "type": "NS"
+    }
+  ],
+  "serial": 2019073000,
+  "soa_edit": "",
+  "soa_edit_api": "",
+  "url": "/api/v1/servers/localhost/zones/gw.lo."
+}

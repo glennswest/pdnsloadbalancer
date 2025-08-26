@@ -355,7 +355,8 @@ To contribute to this project:
 
 ## License
 
-[Specify your license here]
+GPL Version 3
+See gpl-3.0.txt included in this repo.
 
 ## Support
 

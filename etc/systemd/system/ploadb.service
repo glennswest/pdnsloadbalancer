@@ -1,12 +1,12 @@
 [Unit]
 Description=PowerDNSLoadBalancer
-ConditionFileIsExecutable=/root/go/src/github.com/ploadb/ploadb
+ConditionFileIsExecutable=/root/go/src/github.com/pdnsloadbalancer/ploadb/ploadb
 
 
 [Service]
 Type=simple
 RuntimeMaxSec=1800
-ExecStart=/root/go/src/github.com/ploadb/ploadb
+ExecStart=/root/go/src/github.com/pdnsloadbalancer/ploadb/ploadb
 
 
 Restart=always

@@ -14,6 +14,10 @@ import "log"
 import "gopkg.in/natefinch/lumberjack.v2"
 import "github.com/kardianos/service"
 import "github.com/BurntSushi/toml"
+import "net/http"
+import "crypto/tls"
+import "encoding/json"
+import "strings"
  
 
 type program struct{}
@@ -40,6 +44,14 @@ type Config struct {
 
 var MyConfig Config
 
+type ProbeConfig struct {
+	Type     string `json:"type"`     // "ping", "http", or "https"
+	Path     string `json:"path"`     // HTTP path (optional, default "/")
+	Port     int    `json:"port"`     // Port (optional, defaults: 80 for http, 443 for https)
+	Timeout  int    `json:"timeout"`  // Timeout in seconds (optional, default 5)
+	Expected int    `json:"expected"` // Expected HTTP status code (optional, default 200)
+}
+
 // Reads info from config file
 func ReadConfig() Config {
 	var configfile = "/etc/ploadb.conf"
@@ -55,6 +67,84 @@ func ReadConfig() Config {
 	}
 	//log.Print(MyConfig.Index)
 	return MyConfig
+}
+
+func parseProbeConfig(comment string) ProbeConfig {
+	config := ProbeConfig{
+		Type:     "ping",
+		Path:     "/",
+		Port:     0,
+		Timeout:  5,
+		Expected: 200,
+	}
+
+	if comment == "" {
+		return config
+	}
+
+	if strings.HasPrefix(comment, "{") {
+		json.Unmarshal([]byte(comment), &config)
+	}
+
+	if config.Port == 0 {
+		switch config.Type {
+		case "http":
+			config.Port = 80
+		case "https":
+			config.Port = 443
+		}
+	}
+
+	return config
+}
+
+func performPingProbe(ip string, timeout int) bool {
+	pg, err := ping.NewPinger(ip)
+	if err != nil {
+		log.Printf("Failed to create pinger for %s: %v", ip, err)
+		return false
+	}
+	pg.SetPrivileged(true)
+	pg.Count = 3
+	pg.Timeout = time.Duration(timeout) * time.Second
+	pg.Run()
+	stats := pg.Statistics()
+	return stats.PacketsRecv > 0
+}
+
+func performHTTPProbe(ip string, config ProbeConfig) bool {
+	scheme := config.Type
+	url := fmt.Sprintf("%s://%s:%d%s", scheme, ip, config.Port, config.Path)
+
+	client := &http.Client{
+		Timeout: time.Duration(config.Timeout) * time.Second,
+	}
+
+	if scheme == "https" {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		log.Printf("HTTP probe failed for %s: %v", url, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == config.Expected
+}
+
+func performProbe(ip string, config ProbeConfig) bool {
+	switch config.Type {
+	case "http", "https":
+		return performHTTPProbe(ip, config)
+	case "ping":
+		fallthrough
+	default:
+		return performPingProbe(ip, config.Timeout)
+	}
 }
 
 
@@ -144,44 +234,41 @@ func getdomainlist() string{
 }
 
 func handle_load_balance(domain string,name string,count int,records string){
-
-       pger := []*ping.Pinger{}
        recs := gjson.Get(records,"records")
-       for _,host := range(recs.Array()){
-             ipa := gjson.Get(host.String(),"content")
-             ip := ipa.String()
-             pg, _ := ping.NewPinger(ip)
-             pg.SetPrivileged(true)
-             pg.Count = 3
-             pger = append(pger,pg)
-             go pg.Run()
-             }
-       time.Sleep(5 * time.Second)
        changed := false
-       for idx,_ := range(recs.Array()){
-           pg := pger[idx]
-           stats := pg.Statistics
-           //fmt.Printf("%s -> %d packs transmitted - %d packets Received \n",stats().Addr,stats().PacketsSent,stats().PacketsRecv)
+
+       // Get the record comment for probe configuration
+       comment := gjson.Get(records, "comment").String()
+       probeConfig := parseProbeConfig(comment)
+
+       for idx, host := range(recs.Array()){
+           ipa := gjson.Get(host.String(),"content")
+           ip := ipa.String()
+
+           // Perform the appropriate probe based on configuration
+           isHealthy := performProbe(ip, probeConfig)
+
            dsname := "records." + strconv.Itoa(idx) + ".disabled"
            cstate := gjson.Get(records,dsname).String()
-           if (stats().PacketsRecv > 0){
-              if (cstate == "true"){
-                 log.Printf("%s - %s changed state to %s",name,stats().Addr,cstate)
-                 changed = true
-                 }
-              records, _ = sjson.SetRaw(records,dsname,"false")
-            } else {
-              if (cstate == "false"){
-                 log.Printf("%s - %s changed state to %s",name,stats().Addr,cstate)
-                 changed = true
-                 }
-              records, _ = sjson.SetRaw(records,dsname,"true")
+
+           if isHealthy {
+               if (cstate == "true"){
+                   log.Printf("%s - %s changed state from disabled to enabled (%s probe)", name, ip, probeConfig.Type)
+                   changed = true
+               }
+               records, _ = sjson.SetRaw(records,dsname,"false")
+           } else {
+               if (cstate == "false"){
+                   log.Printf("%s - %s changed state from enabled to disabled (%s probe)", name, ip, probeConfig.Type)
+                   changed = true
+               }
+               records, _ = sjson.SetRaw(records,dsname,"true")
            }
-        }
-       
-        if (changed == true){
+       }
+
+       if (changed == true){
            send_update(domain,name,records)
-           }
+       }
 }
 
 func send_update(domain string,name string,records string) string{

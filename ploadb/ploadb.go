@@ -684,7 +684,7 @@ const htmlTemplate = `
             const logBody = document.getElementById('logBody');
             let html = '';
 
-            logs.slice(-50).reverse().forEach(log => { // Show last 50 logs, newest first
+            [...logs].slice(-50).reverse().forEach(log => { // Show last 50 logs, newest first
                 const timestamp = new Date(log.timestamp).toLocaleString();
                 const changeText = log.oldState + ' → ' + log.newState;
                 html += '<tr class="log-entry state-change">';

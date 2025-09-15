@@ -658,7 +658,12 @@ const htmlTemplate = `
                 html += '<div class="zone">📁 ' + zone + '</div>';
                 Object.keys(zones[zone]).sort().forEach(hostname => {
                     html += '<div class="hostname">🖥️ ' + hostname + '</div>';
-                    zones[zone][hostname].forEach(target => {
+                    zones[zone][hostname].sort((a, b) => {
+                        // Sort IP addresses in ascending order (lowest first)
+                        const ipA = a.ip.split('.').map(num => parseInt(num, 10).toString().padStart(3, '0')).join('.');
+                        const ipB = b.ip.split('.').map(num => parseInt(num, 10).toString().padStart(3, '0')).join('.');
+                        return ipA.localeCompare(ipB);
+                    }).forEach(target => {
                         const statusClass = target.enabled ? 'enabled' : 'disabled';
                         const statusBadge = target.enabled ? 'ENABLED' : 'DISABLED';
                         const lastChecked = new Date(target.lastChecked).toLocaleTimeString();

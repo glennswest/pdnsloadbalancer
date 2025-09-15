@@ -1,20 +1,22 @@
 # PowerDNS Load Balancer (ploadb)
 
-A DNS-based load balancer service that monitors multiple IP addresses for DNS A records and automatically enables/disables them based on ICMP ping health checks. This service integrates with PowerDNS via its HTTP API to provide automatic failover and load distribution at the DNS level.
+A DNS-based load balancer service that monitors multiple IP addresses for DNS A records and automatically enables/disables them based on configurable health checks (ping, HTTP, or HTTPS). This service integrates with PowerDNS via its HTTP API to provide automatic failover and load distribution at the DNS level.
 
 ## Overview
 
-The PowerDNS Load Balancer (`ploadb`) is designed to run as a Linux systemd service alongside PowerDNS (pdns) and PowerDNS Recursor. It continuously monitors DNS zones for A records with multiple IP addresses, performs health checks via ICMP ping, and dynamically updates the DNS records to disable unreachable hosts and re-enable them when they come back online.
+The PowerDNS Load Balancer (`ploadb`) is designed to run as a Linux systemd service alongside PowerDNS (pdns) and PowerDNS Recursor. It continuously monitors DNS zones for A records with multiple IP addresses, performs configurable health checks (ping, HTTP, or HTTPS), and dynamically updates the DNS records to disable unreachable hosts and re-enable them when they come back online.
 
 ## Features
 
-- **Automatic Health Monitoring**: ICMP ping-based health checks for all IP addresses in multi-IP A records
+- **Configurable Health Monitoring**: Multiple probe types - ICMP ping, HTTP, and HTTPS health checks
+- **Per-Record Configuration**: Individual health check settings for each DNS record using JSON comments
 - **Dynamic DNS Updates**: Real-time enabling/disabling of DNS records based on host availability
 - **PowerDNS Integration**: Uses PowerDNS HTTP API for seamless zone updates
 - **Service Integration**: Runs as a proper Linux systemd service
-- **Logging**: Comprehensive logging with automatic rotation
-- **Configuration Management**: Simple TOML-based configuration
+- **Enhanced Logging**: Comprehensive logging with probe type information and automatic rotation
+- **Configuration Management**: Simple TOML-based service configuration with JSON probe settings
 - **Concurrent Processing**: Handles multiple zones and records concurrently
+- **Backward Compatibility**: Existing ping-based configurations continue to work unchanged
 
 ## Architecture
 
@@ -25,28 +27,30 @@ The PowerDNS Load Balancer (`ploadb`) is designed to run as a Linux systemd serv
 │                 │    │                  │    │                 │
 │ • Health Checks │    │ • Zone Management│    │ • DNS Queries   │
 │ • Record Updates│    │ • Record Storage │    │ • Load Balanced │
-│ • Logging       │    │ • API Endpoints  │    │   Responses     │
+│ • Probe Config  │    │ • API Endpoints  │    │   Responses     │
+│ • Logging       │    │ • Comment Storage│    │                 │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                                              
-         ▼                                              
-┌─────────────────┐                                    
-│  Target Hosts   │                                    
-│                 │                                    
-│ • IP: 192.168.1.200 ◄─── ICMP Ping                  
-│ • IP: 192.168.1.201 ◄─── Health Checks              
-│ • IP: 192.168.1.202 ◄─── Every 20s                  
-│ • IP: 192.168.1.203                                  
-└─────────────────┘                                    
+         │
+         ▼
+┌─────────────────┐
+│  Target Hosts   │
+│                 │
+│ • IP: 192.168.1.200 ◄─── ICMP Ping
+│ • IP: 192.168.1.201 ◄─── HTTP/HTTPS Checks
+│ • IP: 192.168.1.202 ◄─── Configurable Probes
+│ • IP: 192.168.1.203 ◄─── Every 20s
+└─────────────────┘
 ```
 
 ## How It Works
 
 1. **Zone Discovery**: Every 20 seconds, `ploadb` queries PowerDNS API to get all managed zones
 2. **Record Analysis**: For each zone, it examines all A records and identifies those with multiple IP addresses
-3. **Health Checking**: For each multi-IP A record, it performs concurrent ICMP ping tests (3 packets per IP)
-4. **State Management**: Based on ping results, it determines if each IP should be enabled or disabled
-5. **DNS Updates**: When state changes are detected, it updates the PowerDNS zone via API calls
-6. **Logging**: All state changes and important events are logged with timestamps
+3. **Probe Configuration**: Parses JSON configuration from record comments to determine health check type
+4. **Health Checking**: Performs the configured health check type (ping, HTTP, or HTTPS) for each IP
+5. **State Management**: Based on probe results, it determines if each IP should be enabled or disabled
+6. **DNS Updates**: When state changes are detected, it updates the PowerDNS zone via API calls
+7. **Enhanced Logging**: All state changes are logged with timestamps and probe type information
 
 ## Installation
 
@@ -86,6 +90,70 @@ sudo cp ploadb/etc/ploadb.conf /etc/ploadb.conf
 # PowerDNS API Configuration
 Baseurl = "http://your-pdns-server:8081"
 ApiPassword = "your-api-key-here"
+```
+
+## Health Check Configuration
+
+The service now supports configurable health checks per DNS record using JSON configuration stored in PowerDNS record comments.
+
+### Probe Types
+
+#### ICMP Ping (Default)
+```json
+{"type": "ping", "timeout": 5}
+```
+- Uses 3 ICMP ping packets
+- Default behavior if no comment is provided
+- Requires root or `cap_net_raw` capability
+
+#### HTTP Health Check
+```json
+{"type": "http", "path": "/health", "port": 8080, "timeout": 10, "expected": 200}
+```
+- Makes HTTP GET request to specified path
+- Configurable port, path, timeout, and expected status code
+- Default port: 80
+
+#### HTTPS Health Check
+```json
+{"type": "https", "path": "/api/status", "port": 443, "timeout": 5, "expected": 200}
+```
+- Makes HTTPS GET request to specified path
+- Certificate verification is disabled for simplicity
+- Configurable port, path, timeout, and expected status code
+- Default port: 443
+
+### Configuration Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | string | "ping" | Probe type: "ping", "http", or "https" |
+| `path` | string | "/" | HTTP(S) endpoint path |
+| `port` | int | 80/443 | Port number (80 for HTTP, 443 for HTTPS) |
+| `timeout` | int | 5 | Timeout in seconds |
+| `expected` | int | 200 | Expected HTTP status code |
+
+### Setting Up Health Checks
+
+Configure health checks by adding JSON to PowerDNS record comments:
+
+```bash
+# Example: HTTP health check on port 8080
+curl -X PATCH http://localhost:8081/api/v1/servers/localhost/zones/example.com \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rrsets": [{
+      "name": "api.example.com",
+      "type": "A",
+      "changetype": "REPLACE",
+      "records": [
+        {"content": "10.0.1.10", "disabled": false},
+        {"content": "10.0.1.11", "disabled": false}
+      ],
+      "comment": "{\"type\":\"http\",\"path\":\"/health\",\"port\":8080,\"timeout\":10,\"expected\":200}"
+    }]
+  }'
 ```
 
 3. **Set up logging directory**:
@@ -169,8 +237,10 @@ Logs are written to `/var/log/ploadb/ploadb.log` with automatic rotation:
 
 Example log entries:
 ```
-2024/01/15 10:30:15 api-int.gw.lo. - 192.168.1.201 changed state to false
-2024/01/15 10:30:35 api-int.gw.lo. - 192.168.1.201 changed state to true
+2024/01/15 10:30:15 api-int.gw.lo. - 192.168.1.201 changed state from enabled to disabled (ping probe)
+2024/01/15 10:30:35 api-int.gw.lo. - 192.168.1.201 changed state from disabled to enabled (ping probe)
+2024/01/15 10:31:15 web.example.com. - 10.0.1.10 changed state from disabled to enabled (http probe)
+2024/01/15 10:31:35 secure-api.example.com. - 10.0.1.20 changed state from enabled to disabled (https probe)
 ```
 
 ## Configuration Reference
@@ -189,10 +259,12 @@ For load balancing to work, DNS A records must have:
 - **Type A records only** (AAAA, CNAME, etc. are ignored)
 - **Proper zone configuration** in PowerDNS
 
-Example DNS zone configuration:
+Example DNS zone configurations:
+
+**Ping Health Check (Default):**
 ```json
 {
-  "name": "api.example.com.",
+  "name": "db.example.com.",
   "type": "A",
   "ttl": 300,
   "records": [
@@ -200,6 +272,34 @@ Example DNS zone configuration:
     {"content": "192.168.1.11", "disabled": false},
     {"content": "192.168.1.12", "disabled": false}
   ]
+}
+```
+
+**HTTP Health Check:**
+```json
+{
+  "name": "api.example.com.",
+  "type": "A",
+  "ttl": 300,
+  "records": [
+    {"content": "192.168.1.20", "disabled": false},
+    {"content": "192.168.1.21", "disabled": false}
+  ],
+  "comment": "{\"type\":\"http\",\"path\":\"/health\",\"port\":8080,\"timeout\":5,\"expected\":200}"
+}
+```
+
+**HTTPS Health Check:**
+```json
+{
+  "name": "secure-api.example.com.",
+  "type": "A",
+  "ttl": 300,
+  "records": [
+    {"content": "192.168.1.30", "disabled": false},
+    {"content": "192.168.1.31", "disabled": false}
+  ],
+  "comment": "{\"type\":\"https\",\"path\":\"/status\",\"port\":443,\"timeout\":10,\"expected\":200}"
 }
 ```
 
@@ -230,10 +330,38 @@ sudo tail -f /var/log/ploadb/ploadb.log
 
 To test the health checking mechanism:
 
+#### Ping Probe Testing
 1. **Simulate host failure**: Block ICMP on one of the target hosts
-2. **Watch logs**: Monitor `/var/log/ploadb/ploadb.log` for state changes
-3. **Verify DNS**: Query the DNS record to confirm the failed host is removed
-4. **Restore connectivity**: Unblock ICMP and verify the host is re-enabled
+   ```bash
+   # On target host, block ICMP
+   sudo iptables -A INPUT -p icmp --icmp-type echo-request -j DROP
+   ```
+2. **Watch logs**: Monitor for ping probe failures
+3. **Restore connectivity**: Remove ICMP block
+   ```bash
+   sudo iptables -D INPUT -p icmp --icmp-type echo-request -j DROP
+   ```
+
+#### HTTP/HTTPS Probe Testing
+1. **Simulate service failure**: Stop the web service on one target host
+   ```bash
+   # Stop web service
+   sudo systemctl stop nginx  # or apache2, or your web service
+   ```
+2. **Watch logs**: Monitor for HTTP/HTTPS probe failures
+3. **Test different responses**: Configure service to return different status codes
+4. **Restore service**: Restart the web service
+   ```bash
+   sudo systemctl start nginx
+   ```
+
+#### General Testing Steps
+1. **Monitor logs**: Watch `/var/log/ploadb/ploadb.log` for state changes
+2. **Verify DNS**: Query the DNS record to confirm failed hosts are removed
+   ```bash
+   nslookup your-record.example.com your-dns-server
+   ```
+3. **Test probe configuration**: Verify probe type is logged correctly
 
 ## Troubleshooting
 
@@ -262,6 +390,29 @@ To test the health checking mechanism:
    Check: Binary path in systemd service file
    Verify: Configuration file exists and is readable
    Review: systemctl status ploadb and journalctl -u ploadb
+   ```
+
+5. **HTTP/HTTPS Probe Failures**
+   ```
+   Check: Target service is running on configured port
+   Test: curl http://target-ip:port/path manually
+   Verify: Expected HTTP status code is correct
+   Review: Timeout settings are appropriate for your service
+   ```
+
+6. **Invalid Probe Configuration**
+   ```
+   Verify: JSON syntax is correct in record comments
+   Check: Probe type is "ping", "http", or "https"
+   Test: Configuration falls back to ping on errors
+   Review: Logs for JSON parsing errors
+   ```
+
+7. **HTTPS Certificate Issues**
+   ```
+   Note: Certificate verification is disabled by default
+   Check: Target HTTPS service is accessible
+   Test: curl -k https://target-ip:port/path manually
    ```
 
 ### Debug Mode
@@ -331,9 +482,9 @@ The service works with PowerDNS API JSON structures:
 ### Timing Configuration
 
 - **Health Check Interval**: 20 seconds (configurable in code)
-- **Ping Count**: 3 packets per IP
-- **Ping Timeout**: 5 seconds wait for responses
-- **Concurrent Processing**: All pings executed in parallel
+- **Ping Probes**: 3 packets per IP, 5-second default timeout
+- **HTTP/HTTPS Probes**: Configurable timeout per probe (default 5 seconds)
+- **Sequential Processing**: Probes executed sequentially per record for reliability
 
 ### Scalability
 
@@ -343,6 +494,21 @@ The service is designed to handle:
 - Multiple IP addresses per A record
 - Concurrent health checks for all monitored IPs
 
+## Changelog
+
+### Version 2.0 (2025-09-15) - Configurable Health Probes
+- **New Feature**: Added support for HTTP and HTTPS health checks
+- **Enhancement**: Per-record probe configuration using JSON comments
+- **Improvement**: Enhanced logging with probe type information
+- **Compatibility**: Full backward compatibility with existing ping-based configurations
+- **Configuration**: New probe types support custom paths, ports, timeouts, and expected status codes
+
+### Version 1.0 (Original) - ICMP Ping Health Checks
+- Initial implementation with ICMP ping health checking
+- PowerDNS API integration for zone management
+- Automatic DNS record enable/disable functionality
+- Systemd service integration and log rotation
+
 ## Contributing
 
 To contribute to this project:
@@ -350,7 +516,7 @@ To contribute to this project:
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Test thoroughly
+4. Test thoroughly with all probe types
 5. Submit a pull request
 
 ## License

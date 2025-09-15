@@ -228,6 +228,92 @@ curl -X PATCH http://localhost:8081/api/v1/servers/localhost/zones/example.com \
   }'
 ```
 
+### Real-World Production Examples
+
+These examples show actual configurations from production gw.lo and apps.gw.lo zones:
+
+#### Kubernetes API Load Balancing with TCP Health Checks
+
+```bash
+# Kubernetes control plane nodes with TCP port 6443 health checks
+curl -X PATCH http://192.168.1.51:8081/api/v1/servers/localhost/zones/gw.lo. \
+  -H "X-API-Key: quest.5124" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rrsets": [{
+      "name": "api.gw.lo.",
+      "type": "A",
+      "changetype": "REPLACE",
+      "records": [
+        {"content": "192.168.1.201", "disabled": false},
+        {"content": "192.168.1.202", "disabled": false},
+        {"content": "192.168.1.203", "disabled": false},
+        {"content": "192.168.1.200", "disabled": true},
+        {"content": "192.168.1.168", "disabled": true}
+      ],
+      "comments": [{"content": "{\"type\":\"tcp\",\"port\":6443,\"timeout\":10}", "account": ""}],
+      "ttl": 86400
+    }]
+  }'
+```
+
+**Current Status**: 3 active control plane nodes (192.168.1.201-203), 2 disabled nodes
+
+#### Application Ingress Load Balancing with HTTP Health Checks
+
+```bash
+# OpenShift/Kubernetes worker nodes serving HTTP traffic on port 80
+curl -X PATCH http://192.168.1.51:8081/api/v1/servers/localhost/zones/apps.gw.lo. \
+  -H "X-API-Key: quest.5124" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rrsets": [{
+      "name": "*.apps.gw.lo.",
+      "type": "A",
+      "changetype": "REPLACE",
+      "records": [
+        {"content": "192.168.1.204", "disabled": false},
+        {"content": "192.168.1.205", "disabled": false},
+        {"content": "192.168.1.206", "disabled": false}
+      ],
+      "comments": [{"content": "{\"type\":\"tcp\",\"port\":80,\"timeout\":5}", "account": ""}],
+      "ttl": 100
+    }]
+  }'
+```
+
+**Current Status**: 3 active worker nodes handling wildcard application routing
+
+#### Mixed Health Check Types in Same Zone
+
+```bash
+# Individual control plane nodes with TCP health checks on API port
+curl -X PATCH http://192.168.1.51:8081/api/v1/servers/localhost/zones/gw.lo. \
+  -H "X-API-Key: quest.5124" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rrsets": [
+      {
+        "name": "control0.gw.lo.",
+        "type": "A",
+        "changetype": "REPLACE",
+        "records": [{"content": "192.168.1.201", "disabled": false}],
+        "comments": [{"content": "{\"type\":\"tcp\",\"port\":6443,\"timeout\":10}", "account": ""}],
+        "ttl": 86400
+      },
+      {
+        "name": "worker0.gw.lo.",
+        "type": "A",
+        "changetype": "REPLACE",
+        "records": [{"content": "192.168.1.204", "disabled": false}],
+        "ttl": 86400
+      }
+    ]
+  }'
+```
+
+**Result**: control0 gets TCP health checks, worker0 uses default ping health checks
+
 ## Service Management
 
 ```bash

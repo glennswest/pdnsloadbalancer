@@ -18,6 +18,7 @@ import "net/http"
 import "crypto/tls"
 import "encoding/json"
 import "strings"
+import "net"
  
 
 type program struct{}
@@ -45,9 +46,9 @@ type Config struct {
 var MyConfig Config
 
 type ProbeConfig struct {
-	Type     string `json:"type"`     // "ping", "http", or "https"
+	Type     string `json:"type"`     // "ping", "http", "https", or "tcp"
 	Path     string `json:"path"`     // HTTP path (optional, default "/")
-	Port     int    `json:"port"`     // Port (optional, defaults: 80 for http, 443 for https)
+	Port     int    `json:"port"`     // Port (optional, defaults: 80 for http, 443 for https, required for tcp)
 	Timeout  int    `json:"timeout"`  // Timeout in seconds (optional, default 5)
 	Expected int    `json:"expected"` // Expected HTTP status code (optional, default 200)
 }
@@ -57,7 +58,7 @@ func ReadConfig() Config {
 	var configfile = "/etc/ploadb.conf"
 	_, err := os.Stat(configfile)
 	if err != nil {
-		log.Printf("Config file is missing: ", configfile)
+		log.Printf("Config file is missing: %s", configfile)
                 return MyConfig
 	}
 
@@ -136,10 +137,31 @@ func performHTTPProbe(ip string, config ProbeConfig) bool {
 	return resp.StatusCode == config.Expected
 }
 
+func performTCPProbe(ip string, config ProbeConfig) bool {
+	if config.Port <= 0 || config.Port > 65535 {
+		log.Printf("TCP probe failed for %s: invalid port %d", ip, config.Port)
+		return false
+	}
+
+	address := fmt.Sprintf("%s:%d", ip, config.Port)
+	timeout := time.Duration(config.Timeout) * time.Second
+
+	conn, err := net.DialTimeout("tcp", address, timeout)
+	if err != nil {
+		log.Printf("TCP probe failed for %s: %v", address, err)
+		return false
+	}
+	defer conn.Close()
+
+	return true
+}
+
 func performProbe(ip string, config ProbeConfig) bool {
 	switch config.Type {
 	case "http", "https":
 		return performHTTPProbe(ip, config)
+	case "tcp":
+		return performTCPProbe(ip, config)
 	case "ping":
 		fallthrough
 	default:

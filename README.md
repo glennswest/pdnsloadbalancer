@@ -123,13 +123,22 @@ The service now supports configurable health checks per DNS record using JSON co
 - Configurable port, path, timeout, and expected status code
 - Default port: 443
 
+#### TCP Health Check
+```json
+{"type": "tcp", "port": 6443, "timeout": 10}
+```
+- Attempts TCP socket connection to specified port
+- Port number is required (1-65535)
+- Configurable timeout in seconds
+- Use cases: API servers, databases, SSH services
+
 ### Configuration Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `type` | string | "ping" | Probe type: "ping", "http", or "https" |
+| `type` | string | "ping" | Probe type: "ping", "http", "https", or "tcp" |
 | `path` | string | "/" | HTTP(S) endpoint path |
-| `port` | int | 80/443 | Port number (80 for HTTP, 443 for HTTPS) |
+| `port` | int | 80/443/required | Port number (80 for HTTP, 443 for HTTPS, required for TCP) |
 | `timeout` | int | 5 | Timeout in seconds |
 | `expected` | int | 200 | Expected HTTP status code |
 
@@ -301,6 +310,125 @@ Example DNS zone configurations:
   ],
   "comment": "{\"type\":\"https\",\"path\":\"/status\",\"port\":443,\"timeout\":10,\"expected\":200}"
 }
+```
+
+### Real-World Production Examples
+
+These examples show actual configurations from production gw.lo and apps.gw.lo zones:
+
+#### Kubernetes API Load Balancing with TCP Health Checks
+
+```bash
+# Kubernetes control plane nodes with TCP port 6443 health checks
+curl -X PATCH http://192.168.1.51:8081/api/v1/servers/localhost/zones/gw.lo. \
+  -H "X-API-Key: quest.5124" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rrsets": [{
+      "name": "api.gw.lo.",
+      "type": "A",
+      "changetype": "REPLACE",
+      "records": [
+        {"content": "192.168.1.201", "disabled": false},
+        {"content": "192.168.1.202", "disabled": false},
+        {"content": "192.168.1.203", "disabled": false},
+        {"content": "192.168.1.200", "disabled": true},
+        {"content": "192.168.1.168", "disabled": true}
+      ],
+      "comments": [{"content": "{\"type\":\"tcp\",\"port\":6443,\"timeout\":10}", "account": ""}],
+      "ttl": 86400
+    }]
+  }'
+```
+
+**Current Status**: 3 active control plane nodes (192.168.1.201-203), 2 disabled nodes
+
+#### Application Ingress Load Balancing with TCP Health Checks
+
+```bash
+# OpenShift/Kubernetes worker nodes serving HTTP traffic on port 80
+curl -X PATCH http://192.168.1.51:8081/api/v1/servers/localhost/zones/apps.gw.lo. \
+  -H "X-API-Key: quest.5124" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rrsets": [{
+      "name": "*.apps.gw.lo.",
+      "type": "A",
+      "changetype": "REPLACE",
+      "records": [
+        {"content": "192.168.1.204", "disabled": false},
+        {"content": "192.168.1.205", "disabled": false},
+        {"content": "192.168.1.206", "disabled": false}
+      ],
+      "comments": [{"content": "{\"type\":\"tcp\",\"port\":80,\"timeout\":5}", "account": ""}],
+      "ttl": 100
+    }]
+  }'
+```
+
+**Current Status**: 3 active worker nodes handling wildcard application routing
+
+#### Mixed Health Check Types in Same Zone
+
+```bash
+# Individual control plane nodes with TCP health checks on API port
+curl -X PATCH http://192.168.1.51:8081/api/v1/servers/localhost/zones/gw.lo. \
+  -H "X-API-Key: quest.5124" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rrsets": [
+      {
+        "name": "control0.gw.lo.",
+        "type": "A",
+        "changetype": "REPLACE",
+        "records": [{"content": "192.168.1.201", "disabled": false}],
+        "comments": [{"content": "{\"type\":\"tcp\",\"port\":6443,\"timeout\":10}", "account": ""}],
+        "ttl": 86400
+      },
+      {
+        "name": "worker0.gw.lo.",
+        "type": "A",
+        "changetype": "REPLACE",
+        "records": [{"content": "192.168.1.204", "disabled": false}],
+        "ttl": 86400
+      }
+    ]
+  }'
+```
+
+**Result**: control0 gets TCP health checks, worker0 uses default ping health checks
+
+#### TCP Health Check Configuration
+
+TCP health checks were added in version 2.1 and provide simple port connectivity testing:
+
+```json
+{"type": "tcp", "port": 22, "timeout": 5}
+```
+
+- **Port Requirement**: Must specify a valid port (1-65535)
+- **Connection Test**: Attempts TCP socket connection to specified port
+- **Timeout Support**: Configurable connection timeout (default 5 seconds)
+- **Use Cases**: Database connections, SSH services, API endpoints, Kubernetes API servers
+
+**TCP Configuration Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `type` | string | Yes | Must be "tcp" |
+| `port` | int | Yes | Port number (1-65535) |
+| `timeout` | int | No | Timeout in seconds (default 5) |
+
+**TCP Probe Examples:**
+```bash
+# SSH service monitoring
+"comment": "{\"type\":\"tcp\",\"port\":22}"
+
+# Database connectivity
+"comment": "{\"type\":\"tcp\",\"port\":5432,\"timeout\":10}"
+
+# Kubernetes API server
+"comment": "{\"type\":\"tcp\",\"port\":6443,\"timeout\":10}"
 ```
 
 ## Testing

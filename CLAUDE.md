@@ -141,6 +141,46 @@ The service communicates with PowerDNS HTTP API using these endpoints:
 
 Authentication via `X-API-Key` header matching PowerDNS `api-key` configuration.
 
+## Web GUI Dashboard
+
+PowerDNS Load Balancer includes a built-in web dashboard for monitoring health check status in real-time. The GUI provides:
+
+- **Real-time Status**: Live updates of all monitored zones and their health states
+- **Visual Indicators**: Color-coded status badges (ENABLED/DISABLED) for each IP address
+- **Detailed Information**: Shows last check times, probe types, and configuration details
+- **Sorted Display**: IP addresses are displayed in numerical order for easy reading
+- **Auto-refresh**: WebSocket connection provides instant updates without page refresh
+
+### Accessing the GUI
+
+The web interface is available at `http://localhost:8080` by default. The port can be configured in `/etc/ploadb.conf`:
+
+```toml
+WebPort = "8080"  # Default web GUI port
+```
+
+### GUI Features
+
+![PowerDNS Load Balancer GUI](ploadb-gui-screenshot.png)
+
+The dashboard displays:
+- **Zone Organization**: Zones are grouped and clearly labeled with folder icons
+- **Hostname Grouping**: Each hostname shows all associated IP addresses
+- **Status Badges**: Green "ENABLED" and red "DISABLED" badges for quick status identification
+- **Timestamps**: Last health check time for each IP address
+- **Probe Types**: Displays the type of health check being performed (ping, http, https, tcp)
+- **Live Updates**: Real-time status changes via WebSocket connection
+
+### Service Management via GUI
+
+While the GUI is read-only for monitoring, it provides comprehensive visibility into:
+- Current health status of all monitored endpoints
+- Historical state changes and timing information
+- Active probe configurations for each record
+- Overall system health at a glance
+
+For configuration changes, continue to use the PowerDNS API directly as shown in the examples below.
+
 ## Example Usage
 
 ### Setting up HTTP Health Checks

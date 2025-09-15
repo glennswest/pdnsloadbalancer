@@ -198,7 +198,7 @@ func send_update(domain string,name string,records string) string{
            SetBody(data).
            Patch("/api/v1/servers/localhost/zones/" + domain)
         // Explore response object
-        //*
+        /*
         fmt.Println("Response Info:")
         //fmt.Println("Error      :", err)
         fmt.Println("Status Code:", resp.StatusCode())
@@ -207,7 +207,7 @@ func send_update(domain string,name string,records string) string{
         fmt.Println("Received At:", resp.ReceivedAt())
         fmt.Println("Body       :\n", resp)
         fmt.Println()
-        //*/
+        */
         return(resp.String())
 
 

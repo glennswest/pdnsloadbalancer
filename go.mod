@@ -5,6 +5,7 @@ go 1.24.2
 require (
 	github.com/BurntSushi/toml v1.5.0
 	github.com/go-resty/resty v1.8.0
+	github.com/gorilla/websocket v1.5.1
 	github.com/kardianos/service v1.2.4
 	github.com/oilbeater/go-ping v0.0.0-20200413021620-332b7197c5b5
 	github.com/tidwall/gjson v1.18.0

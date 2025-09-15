@@ -4,7 +4,7 @@ import "github.com/tidwall/sjson"
 import "github.com/tidwall/gjson"
 import "os"
 import "github.com/go-resty/resty"
-//import "fmt"
+import "fmt"
 import "time"
 //import ping "github.com/sparrc/go-ping"
 // Close raise condition fixed by using oilbeater
@@ -188,7 +188,7 @@ func send_update(domain string,name string,records string) string{
 // Create a Resty Client
        data, _  := sjson.SetRaw("","rrsets.0",records)
        data, _ = sjson.Set(data,"rrsets.0.changetype", "replace")
-       //fmt.Printf("send_update: %s\n",data)
+       fmt.Printf("send_update: %s\n",data)
        client := resty.New()
        client.SetHostURL(MyConfig.Baseurl)
        resp, _ := client.R().
@@ -198,16 +198,16 @@ func send_update(domain string,name string,records string) string{
            SetBody(data).
            Patch("/api/v1/servers/localhost/zones/" + domain)
         // Explore response object
-        /*
+        //*
         fmt.Println("Response Info:")
-        fmt.Println("Error      :", err)
+        //fmt.Println("Error      :", err)
         fmt.Println("Status Code:", resp.StatusCode())
         fmt.Println("Status     :", resp.Status())
         fmt.Println("Time       :", resp.Time())
         fmt.Println("Received At:", resp.ReceivedAt())
         fmt.Println("Body       :\n", resp)
         fmt.Println()
-        */
+        //*/
         return(resp.String())
 
 

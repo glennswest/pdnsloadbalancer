@@ -11,15 +11,15 @@
         },
         {
           "content": "192.168.1.201",
-          "disabled": false
+          "disabled": true
         },
         {
           "content": "192.168.1.203",
-          "disabled": false
+          "disabled": true
         },
         {
           "content": "192.168.1.202",
-          "disabled": false
+          "disabled": true
         }
       ],
       "ttl": 86400,

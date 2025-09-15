@@ -302,7 +302,7 @@ func handle_load_balance(domain string,name string,count int,records string){
        changed := false
 
        // Get the record comment for probe configuration
-       comment := gjson.Get(records, "comment").String()
+       comment := gjson.Get(records, "comments.0.content").String()
        probeConfig := parseProbeConfig(comment)
 
        for idx, host := range(recs.Array()){
@@ -377,7 +377,7 @@ func DoWork(){
         for _,domain := range domains{
               process_domain(domain.String())
               }
-       time.Sleep(20 * time.Second)
+       time.Sleep(10 * time.Second)
         }
 }
 

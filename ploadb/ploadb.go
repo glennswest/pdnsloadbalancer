@@ -32,6 +32,8 @@ type program struct{}
 func (p *program) Start(s service.Service) error {
         ReadConfig()
 	startWebServer()
+	// Clear DNS caches on startup for a clean state
+	clearAllDNSCaches()
 	// Notify systemd that we're ready
 	daemon.SdNotify(false, daemon.SdNotifyReady)
 	go p.run()
@@ -466,6 +468,165 @@ func clearRecursorZoneCache(zone string) error {
 	return nil
 }
 
+func clearAuthoritativeCache() error {
+	// Clear PowerDNS Authoritative cache using pdns_control
+	cmd := "pdns_control purge"
+
+	// Execute the command with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	execCmd := exec.CommandContext(ctx, "sh", "-c", cmd)
+	output, err := execCmd.Output()
+	if err != nil {
+		// Check if it's a timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("timeout clearing authoritative cache")
+		}
+		// Check if it's a command not found error
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Some versions don't have cache or purge command, that's okay
+			log.Printf("Note: pdns_control purge not available or cache disabled: %s", string(exitErr.Stderr))
+			return nil
+		}
+		return fmt.Errorf("failed to clear authoritative cache: %v", err)
+	}
+
+	outputStr := strings.TrimSpace(string(output))
+	if outputStr != "" {
+		log.Printf("Cleared authoritative cache: %s", outputStr)
+	}
+
+	return nil
+}
+
+func clearRecursorFullCache() error {
+	// Clear entire PowerDNS Recursor cache
+	cmd := "rec_control wipe-cache ."
+
+	// Execute the command with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	execCmd := exec.CommandContext(ctx, "sh", "-c", cmd)
+	output, err := execCmd.Output()
+	if err != nil {
+		// Check if it's a timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("timeout clearing full recursor cache")
+		}
+		// Check if it's a command not found error
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("rec_control command failed: exit code %d, stderr: %s",
+				exitErr.ExitCode(), string(exitErr.Stderr))
+		}
+		return fmt.Errorf("failed to clear full recursor cache: %v", err)
+	}
+
+	outputStr := strings.TrimSpace(string(output))
+	log.Printf("Cleared full recursor cache: %s", outputStr)
+
+	return nil
+}
+
+func clearAllDNSCaches() {
+	log.Printf("Clearing all DNS caches on startup...")
+
+	// Clear PowerDNS Authoritative cache (if available)
+	if err := clearAuthoritativeCache(); err != nil {
+		log.Printf("Warning: Could not clear authoritative cache: %v", err)
+	}
+
+	// Clear PowerDNS Recursor cache
+	if err := clearRecursorFullCache(); err != nil {
+		log.Printf("Warning: Could not clear recursor cache: %v", err)
+	}
+
+	log.Printf("DNS cache clearing completed")
+}
+
+// Check for and clear stale discrete entries that might conflict with wildcard resolution
+func checkAndClearStaleDiscreteEntries(domain string, wildcardZone string) {
+	log.Printf("Clearing discrete entries from recursor cache for wildcard zone %s", wildcardZone)
+
+	// Get all A records from the zone to identify discrete entries
+	data := getdomain(domain)
+	rrsets := gjson.Get(data, "rrsets").Array()
+
+	// Track discrete (non-wildcard) hostnames in this zone
+	var discreteEntries []string
+	for _, element := range rrsets {
+		thename := gjson.Get(element.String(), "name").String()
+		thetype := gjson.Get(element.String(), "type").String()
+
+		// Look for A records that are not wildcards but are in the wildcard zone
+		if thetype == "A" && !strings.HasPrefix(thename, "*.") && strings.HasSuffix(thename, wildcardZone) {
+			// This is a discrete entry that might have stale cache
+			discreteEntries = append(discreteEntries, thename)
+		}
+	}
+
+	// Clear recursor cache for each discrete entry found - ALWAYS clear them on state change
+	if len(discreteEntries) > 0 {
+		log.Printf("Found %d discrete entries in wildcard zone %s, clearing all from recursor cache", len(discreteEntries), wildcardZone)
+		for _, entry := range discreteEntries {
+			// Always clear cache for discrete entries when wildcard state changes
+			log.Printf("Clearing recursor cache for discrete entry: %s", entry)
+			if err := clearRecursorCache(entry); err != nil {
+				log.Printf("Warning: Failed to clear cache for %s: %v", entry, err)
+			}
+		}
+	}
+
+	// Also clear cache for common OpenShift/Kubernetes subdomains that might exist
+	// These are cleared regardless of whether they exist in PowerDNS to ensure fresh resolution
+	commonSubdomains := []string{
+		"oauth-openshift",
+		"console-openshift-console",
+		"oauth-openshift-console",
+		"downloads-openshift-console",
+		"grafana",
+		"prometheus",
+		"alertmanager",
+		"oauth2-proxy",
+		"ingress",
+		"router",
+		"registry",
+		"image-registry",
+		"metrics",
+		"monitoring",
+		"logging",
+	}
+
+	clearedCount := 0
+	for _, subdomain := range commonSubdomains {
+		hostname := subdomain + "." + wildcardZone
+
+		// Always try to clear cache for these entries
+		cmd := fmt.Sprintf("rec_control wipe-cache '%s'", hostname)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		execCmd := exec.CommandContext(ctx, "sh", "-c", cmd)
+		output, err := execCmd.Output()
+		cancel()
+
+		if err == nil {
+			outputStr := strings.TrimSpace(string(output))
+			// Check if any entries were cleared (negative or positive)
+			if strings.Contains(outputStr, "wiped") {
+				// Parse the output to see if anything was actually cleared
+				if !strings.Contains(outputStr, "wiped 0 records, 0 negative") {
+					log.Printf("Cleared cache for %s: %s", hostname, outputStr)
+					clearedCount++
+				}
+			}
+		}
+	}
+
+	if clearedCount > 0 {
+		log.Printf("Cleared %d common subdomain entries from recursor cache for zone %s", clearedCount, wildcardZone)
+	}
+}
+
 
 func main() {
 	// Start should not block. Do the actual work async.
@@ -646,6 +807,19 @@ func send_update(domain string,name string,records string) string{
                 if err := clearRecursorCache(name); err != nil {
                     log.Printf("Warning: Failed to clear recursor cache for %s: %v", name, err)
                 }
+
+                // For wildcard domains, also clear negative cache entries that might affect wildcard resolution
+                if strings.HasPrefix(name, "*.") {
+                    // Clear the wildcard zone cache to ensure negative entries don't interfere
+                    zoneName := strings.TrimPrefix(name, "*.")
+                    if err := clearRecursorZoneCache(zoneName); err != nil {
+                        log.Printf("Warning: Failed to clear recursor zone cache for wildcard %s: %v", zoneName, err)
+                    }
+                    log.Printf("Cleared recursor cache for wildcard zone: %s", zoneName)
+
+                    // Also check and clear any discrete stale entries that might conflict with wildcard
+                    go checkAndClearStaleDiscreteEntries(domain, zoneName)
+                }
             }()
         } else {
             log.Printf("DNS update failed for %s, status: %d, not clearing cache", name, resp.StatusCode())
@@ -673,16 +847,23 @@ func DoWork(){
         // Notify systemd watchdog that we're alive
         daemon.SdNotify(false, daemon.SdNotifyWatchdog)
 
+        // Track active targets in this cycle to clean up stale ones
+        activeTargets := make(map[string]bool)
+
         domainsjs := getdomainlist()
         domains := gjson.Parse(domainsjs).Array()
         for _,domain := range domains{
-              process_domain(domain.String())
+              process_domain(domain.String(), activeTargets)
               }
+
+        // Clean up targets that are no longer active
+        cleanupStaleTargets(activeTargets)
+
        time.Sleep(20 * time.Second)
         }
 }
 
-func process_domain(domain string){
+func process_domain(domain string, activeTargets map[string]bool){
 
 
         data := getdomain(domain)
@@ -693,9 +874,65 @@ func process_domain(domain string){
              entries := gjson.Get(element.String(),"records")
              cnt := len(entries.Array())
              if cnt > 1 && thetype != "" && thetype == "A"{
+                // Mark all IPs in this record as active
+                for _, host := range entries.Array() {
+                    ip := gjson.Get(host.String(), "content").String()
+                    targetKey := domain + ":" + thename + ":" + ip
+                    activeTargets[targetKey] = true
+                }
                 go handle_load_balance(domain,thename,cnt,element.String())
                 }
              }
+}
+
+// Clean up targets that are no longer present in PowerDNS
+func cleanupStaleTargets(activeTargets map[string]bool) {
+	statusMutex.Lock()
+	defer statusMutex.Unlock()
+
+	var updatedTargets []TargetStatus
+	var removedCount int
+	var removedTargets []TargetStatus
+
+	for _, target := range currentStatus.Targets {
+		targetKey := target.Zone + ":" + target.Hostname + ":" + target.IP
+		if activeTargets[targetKey] {
+			// Target is still active, keep it
+			updatedTargets = append(updatedTargets, target)
+		} else {
+			// Target is stale, remove it
+			log.Printf("Removing stale target: %s - %s (zone: %s)", target.Hostname, target.IP, target.Zone)
+			removedTargets = append(removedTargets, target)
+			removedCount++
+		}
+	}
+
+	if removedCount > 0 {
+		currentStatus.Targets = updatedTargets
+		log.Printf("Cleaned up %d stale targets", removedCount)
+
+		// Add removal entries to the GUI log
+		for _, removed := range removedTargets {
+			logEntry := LogEntry{
+				Timestamp: time.Now(),
+				Hostname:  removed.Hostname,
+				IP:        removed.IP,
+				OldState:  "monitored",
+				NewState:  "removed",
+				ProbeType: removed.ProbeType,
+				Message:   fmt.Sprintf("%s - %s removed from monitoring (record deleted from DNS)", removed.Hostname, removed.IP),
+			}
+			currentStatus.Logs = append(currentStatus.Logs, logEntry)
+		}
+
+		// Keep only last 100 log entries
+		if len(currentStatus.Logs) > 100 {
+			currentStatus.Logs = currentStatus.Logs[len(currentStatus.Logs)-100:]
+		}
+
+		// Broadcast update outside of mutex lock
+		go broadcastUpdate()
+	}
 }
 
 // Web GUI HTML template
@@ -826,6 +1063,18 @@ const htmlTemplate = `
         }
         .log-entry.state-change {
             background: #fff3cd;
+        }
+        .log-entry.removed-entry {
+            background: #f8d7da;
+            border-left: 3px solid #dc3545;
+        }
+        .log-entry.enabled-entry {
+            background: #d4edda;
+            border-left: 3px solid #28a745;
+        }
+        .log-entry.disabled-entry {
+            background: #f8d7da;
+            border-left: 3px solid #ffc107;
         }
         .timestamp {
             font-family: monospace;
@@ -1023,10 +1272,19 @@ const htmlTemplate = `
 
         function updateTargets(targets) {
             const targetTree = document.getElementById('targetTree');
+            if (!targetTree) return;
+
+            // Ensure targets is an array
+            if (!targets || !Array.isArray(targets)) {
+                targetTree.innerHTML = '<div>No load balanced targets found</div>';
+                return;
+            }
+
             const zones = {};
 
             // Group targets by zone
             targets.forEach(target => {
+                if (!target) return;
                 if (!zones[target.zone]) {
                     zones[target.zone] = {};
                 }
@@ -1073,10 +1331,19 @@ const htmlTemplate = `
 
         function updateDNSResolutions(resolutions) {
             const dnsTree = document.getElementById('dnsTree');
+            if (!dnsTree) return;
+
+            // Ensure resolutions is an array
+            if (!resolutions || !Array.isArray(resolutions)) {
+                dnsTree.innerHTML = '<div>No DNS resolutions available</div>';
+                return;
+            }
+
             const zones = {};
 
             // Group resolutions by zone
             resolutions.forEach(resolution => {
+                if (!resolution) return;
                 if (!zones[resolution.zone]) {
                     zones[resolution.zone] = [];
                 }
@@ -1130,17 +1397,42 @@ const htmlTemplate = `
 
         function updateLogs(logs) {
             const logBody = document.getElementById('logBody');
+            if (!logBody) return;
+
             let html = '';
 
-            [...logs].slice(-50).reverse().forEach(log => { // Show last 50 logs, newest first
+            // Ensure logs is an array before processing
+            if (!logs || !Array.isArray(logs)) {
+                html = '<tr><td colspan="5">No status changes logged yet</td></tr>';
+                logBody.innerHTML = html;
+                return;
+            }
+
+            // Process the last 50 logs, newest first
+            const logsToShow = logs.slice(-50).reverse();
+
+            logsToShow.forEach(log => {
+                if (!log) return; // Skip null/undefined entries
+
                 const timestamp = new Date(log.timestamp).toLocaleString();
                 const changeText = log.oldState + ' → ' + log.newState;
-                html += '<tr class="log-entry state-change">';
+
+                // Determine row class based on state change
+                let rowClass = 'log-entry state-change';
+                if (log.newState === 'removed') {
+                    rowClass += ' removed-entry';
+                } else if (log.newState === 'enabled') {
+                    rowClass += ' enabled-entry';
+                } else if (log.newState === 'disabled') {
+                    rowClass += ' disabled-entry';
+                }
+
+                html += '<tr class="' + rowClass + '">';
                 html += '<td class="timestamp">' + timestamp + '</td>';
-                html += '<td>' + log.hostname + '</td>';
-                html += '<td>' + log.ip + '</td>';
+                html += '<td>' + (log.hostname || '') + '</td>';
+                html += '<td>' + (log.ip || '') + '</td>';
                 html += '<td>' + changeText + '</td>';
-                html += '<td><span class="probe-type">' + log.probeType + '</span></td>';
+                html += '<td><span class="probe-type">' + (log.probeType || '') + '</span></td>';
                 html += '</tr>';
             });
 

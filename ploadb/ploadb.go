@@ -57,12 +57,14 @@ var MyConfig Config
 
 // Web GUI data structures
 type TargetStatus struct {
-	Hostname    string    `json:"hostname"`
-	IP          string    `json:"ip"`
-	Enabled     bool      `json:"enabled"`
-	ProbeType   string    `json:"probeType"`
-	LastChecked time.Time `json:"lastChecked"`
-	Zone        string    `json:"zone"`
+	Hostname        string    `json:"hostname"`
+	IP              string    `json:"ip"`
+	Enabled         bool      `json:"enabled"`
+	ProbeType       string    `json:"probeType"`
+	LastChecked     time.Time `json:"lastChecked"`
+	Zone            string    `json:"zone"`
+	StateChangedAt  time.Time `json:"stateChangedAt"`
+	CurrentUptime   string    `json:"currentUptime"`
 }
 
 type LogEntry struct {
@@ -94,11 +96,13 @@ type StatusData struct {
 	Targets     []TargetStatus  `json:"targets"`
 	Logs        []LogEntry      `json:"logs"`
 	Resolutions []DNSResolution `json:"resolutions"`
+	Uptime      string          `json:"uptime"`
 }
 
 // Global state for web GUI
 var (
 	statusMutex   sync.RWMutex
+	serviceStartTime time.Time = time.Now()
 	currentStatus StatusData = StatusData{
 		Targets:     make([]TargetStatus, 0),
 		Logs:        make([]LogEntry, 0),
@@ -125,6 +129,67 @@ type ProbeConfig struct {
 	Port     int    `json:"port"`     // Port (optional, defaults: 80 for http, 443 for https, required for tcp)
 	Timeout  int    `json:"timeout"`  // Timeout in seconds (optional, default 5)
 	Expected int    `json:"expected"` // Expected HTTP status code (optional, default 200)
+}
+
+// Format uptime duration using the largest appropriate unit
+func formatUptime(duration time.Duration) string {
+	totalSeconds := int64(duration.Seconds())
+
+	// Define time units in seconds
+	const (
+		secondsPerMinute = 60
+		secondsPerHour   = 3600
+		secondsPerDay    = 86400
+		secondsPerMonth  = 2592000  // 30 days
+		secondsPerYear   = 31536000 // 365 days
+	)
+
+	// Check from largest to smallest unit
+	if totalSeconds >= secondsPerYear {
+		years := totalSeconds / secondsPerYear
+		if years == 1 {
+			return "1 yr"
+		}
+		return fmt.Sprintf("%d yr", years)
+	}
+
+	if totalSeconds >= secondsPerMonth {
+		months := totalSeconds / secondsPerMonth
+		if months == 1 {
+			return "1 mo"
+		}
+		return fmt.Sprintf("%d mo", months)
+	}
+
+	if totalSeconds >= secondsPerDay {
+		days := totalSeconds / secondsPerDay
+		if days == 1 {
+			return "1 day"
+		}
+		return fmt.Sprintf("%d days", days)
+	}
+
+	if totalSeconds >= secondsPerHour {
+		hours := totalSeconds / secondsPerHour
+		if hours == 1 {
+			return "1 hr"
+		}
+		return fmt.Sprintf("%d hr", hours)
+	}
+
+	if totalSeconds >= secondsPerMinute {
+		minutes := totalSeconds / secondsPerMinute
+		if minutes == 1 {
+			return "1 min"
+		}
+		return fmt.Sprintf("%d min", minutes)
+	}
+
+	// Default to seconds
+	if totalSeconds == 1 {
+		return "1 sec"
+	}
+	return fmt.Sprintf("%d sec", totalSeconds)
 }
 
 // Reads info from config file
@@ -256,25 +321,31 @@ func queryDNSServer(hostname, server string) ([]string, int, error) {
 		return nil, 0, err
 	}
 
-	if r.Rcode != dns.RcodeSuccess {
+	// Handle different DNS response codes
+	switch r.Rcode {
+	case dns.RcodeSuccess:
+		// Success - parse A records
+		var ips []string
+		var ttl int = 300 // default TTL
+
+		for _, ans := range r.Answer {
+			if a, ok := ans.(*dns.A); ok {
+				ips = append(ips, a.A.String())
+				ttl = int(a.Hdr.Ttl)
+			}
+		}
+
+		// Return empty list if no A records found (valid response)
+		return ips, ttl, nil
+
+	case dns.RcodeNameError: // NXDOMAIN
+		// Domain doesn't exist - return empty list (not an error for GUI purposes)
+		return []string{}, 0, nil
+
+	default:
+		// Other DNS errors (SERVFAIL, REFUSED, etc.)
 		return nil, 0, fmt.Errorf("DNS error code: %d", r.Rcode)
 	}
-
-	var ips []string
-	var ttl int = 300 // default TTL
-
-	for _, ans := range r.Answer {
-		if a, ok := ans.(*dns.A); ok {
-			ips = append(ips, a.A.String())
-			ttl = int(a.Hdr.Ttl)
-		}
-	}
-
-	if len(ips) > 0 {
-		return ips, ttl, nil
-	}
-
-	return nil, 0, fmt.Errorf("no A records found")
 }
 
 func resolveDNSWithTTL(hostname string) ([]string, int, error) {
@@ -520,13 +591,13 @@ func handle_load_balance(domain string,name string,count int,records string){
            dsname := "records." + strconv.Itoa(idx) + ".disabled"
            cstate := gjson.Get(records,dsname).String()
 
-           // Update target status for web GUI
-           updateTargetStatus(domain, name, ip, probeConfig.Type, isHealthy)
-
+           // Check if state is changing
+           stateChanged := false
            if isHealthy {
                if (cstate == "true"){
                    log.Printf("%s - %s changed state from disabled to enabled (%s probe)", name, ip, probeConfig.Type)
                    addLogEntry(name, ip, "disabled", "enabled", probeConfig.Type)
+                   stateChanged = true
                    changed = true
                }
                records, _ = sjson.SetRaw(records,dsname,"false")
@@ -534,10 +605,14 @@ func handle_load_balance(domain string,name string,count int,records string){
                if (cstate == "false"){
                    log.Printf("%s - %s changed state from enabled to disabled (%s probe)", name, ip, probeConfig.Type)
                    addLogEntry(name, ip, "enabled", "disabled", probeConfig.Type)
+                   stateChanged = true
                    changed = true
                }
                records, _ = sjson.SetRaw(records,dsname,"true")
            }
+
+           // Update target status for web GUI with state change information
+           updateTargetStatus(domain, name, ip, probeConfig.Type, isHealthy, stateChanged)
        }
 
        if (changed == true){
@@ -552,6 +627,8 @@ func send_update(domain string,name string,records string) string{
 // Create a Resty Client
        data, _  := sjson.SetRaw("","rrsets.0",records)
        data, _ = sjson.Set(data,"rrsets.0.changetype", "replace")
+       // Set TTL to 30 seconds for load balanced records
+       data, _ = sjson.Set(data,"rrsets.0.ttl", 30)
        fmt.Printf("send_update: %s\n",data)
        client := resty.New()
        client.SetHostURL(MyConfig.Baseurl)
@@ -633,11 +710,11 @@ const htmlTemplate = `
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             margin: 0;
-            padding: 20px;
+            padding: 10px;
             background-color: #f5f5f5;
         }
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
             background: white;
             border-radius: 8px;
@@ -653,8 +730,8 @@ const htmlTemplate = `
         .dashboard {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
-            gap: 20px;
-            padding: 20px;
+            gap: 15px;
+            padding: 15px;
         }
         .panel {
             border: 1px solid #ddd;
@@ -669,7 +746,7 @@ const htmlTemplate = `
         }
         .panel-content {
             padding: 15px;
-            max-height: 500px;
+            max-height: 600px;
             overflow-y: auto;
         }
         .tree-view {
@@ -828,10 +905,24 @@ const htmlTemplate = `
             .dashboard {
                 grid-template-columns: 1fr 1fr;
             }
+            .panel-content {
+                max-height: 400px;
+            }
         }
         @media (max-width: 768px) {
             .dashboard {
                 grid-template-columns: 1fr;
+            }
+            .panel-content {
+                max-height: 350px;
+            }
+            body {
+                padding: 5px;
+            }
+        }
+        @media (min-width: 1400px) {
+            .panel-content {
+                max-height: 700px;
             }
         }
     </style>
@@ -856,7 +947,7 @@ const htmlTemplate = `
             </div>
 
             <div class="panel">
-                <div class="panel-header">Current DNS Resolution</div>
+                <div class="panel-header">Current DNS Resolution <span id="uptimeDisplay" style="float: right; font-weight: normal; font-size: 0.9em;">Uptime: loading...</span></div>
                 <div class="panel-content">
                     <div id="dnsTree" class="dns-resolution">
                         <div>Loading DNS resolutions...</div>
@@ -908,6 +999,7 @@ const htmlTemplate = `
                 updateTargets(data.targets);
                 updateDNSResolutions(data.resolutions);
                 updateLogs(data.logs);
+                updateUptime(data.uptime);
             };
 
             ws.onclose = function() {
@@ -958,11 +1050,14 @@ const htmlTemplate = `
                         const statusClass = target.enabled ? 'enabled' : 'disabled';
                         const statusBadge = target.enabled ? 'ENABLED' : 'DISABLED';
                         const lastChecked = new Date(target.lastChecked).toLocaleTimeString();
+                        const uptime = target.currentUptime || 'N/A';
+                        const arrow = target.enabled ? '↑' : '↓';
+                        const arrowColor = target.enabled ? '#00AA00' : '#FF0000';
                         html += '<div class="target ' + statusClass + '">';
-                        html += '<span>📍 ' + target.ip + '</span>';
+                        html += '<span>📍 ' + target.ip + ' <span class="probe-type">' + target.probeType + '</span></span>';
                         html += '<span>';
                         html += '<span class="status-badge status-' + statusClass + '">' + statusBadge + '</span>';
-                        html += '<span class="probe-type">' + target.probeType + '</span>';
+                        html += ' <small style="color: #666;">(' + uptime + ' <span style="color: ' + arrowColor + '; font-weight: 900; font-size: 1.6em; text-shadow: 1px 1px 2px rgba(0,0,0,0.5);">' + arrow + '</span>)</small>';
                         html += '</span>';
                         html += '</div>';
                     });
@@ -1056,6 +1151,13 @@ const htmlTemplate = `
             logBody.innerHTML = html;
         }
 
+        function updateUptime(uptime) {
+            const uptimeDisplay = document.getElementById('uptimeDisplay');
+            if (uptimeDisplay && uptime) {
+                uptimeDisplay.textContent = 'Uptime: ' + uptime;
+            }
+        }
+
         // Start connection when page loads
         connect();
     </script>
@@ -1116,6 +1218,17 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial data
 	statusMutex.RLock()
+	currentStatus.Uptime = formatUptime(time.Since(serviceStartTime))
+
+	// Update all target uptimes
+	now := time.Now()
+	for i := range currentStatus.Targets {
+		if !currentStatus.Targets[i].StateChangedAt.IsZero() {
+			uptime := now.Sub(currentStatus.Targets[i].StateChangedAt)
+			currentStatus.Targets[i].CurrentUptime = formatUptime(uptime)
+		}
+	}
+
 	data, _ := json.Marshal(currentStatus)
 	statusMutex.RUnlock()
 	conn.WriteMessage(websocket.TextMessage, data)
@@ -1134,6 +1247,18 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 func broadcastUpdate() {
 	statusMutex.RLock()
+	// Update service uptime
+	currentStatus.Uptime = formatUptime(time.Since(serviceStartTime))
+
+	// Update all target uptimes before marshaling
+	now := time.Now()
+	for i := range currentStatus.Targets {
+		if !currentStatus.Targets[i].StateChangedAt.IsZero() {
+			uptime := now.Sub(currentStatus.Targets[i].StateChangedAt)
+			currentStatus.Targets[i].CurrentUptime = formatUptime(uptime)
+		}
+	}
+
 	data, err := json.Marshal(currentStatus)
 	statusMutex.RUnlock()
 
@@ -1178,16 +1303,34 @@ func addLogEntry(hostname, ip, oldState, newState, probeType string) {
 	broadcastUpdate()
 }
 
-func updateTargetStatus(zone, hostname, ip, probeType string, enabled bool) {
+func updateTargetStatus(zone, hostname, ip, probeType string, enabled bool, stateChanged bool) {
 	statusMutex.Lock()
+	now := time.Now()
 
 	// Find existing target or create new one
 	found := false
 	for i, target := range currentStatus.Targets {
 		if target.Zone == zone && target.Hostname == hostname && target.IP == ip {
+			// Update basic info
 			currentStatus.Targets[i].Enabled = enabled
 			currentStatus.Targets[i].ProbeType = probeType
-			currentStatus.Targets[i].LastChecked = time.Now()
+			currentStatus.Targets[i].LastChecked = now
+
+			// If state changed, update the state change timestamp
+			if stateChanged {
+				currentStatus.Targets[i].StateChangedAt = now
+			}
+
+			// Calculate uptime in current state
+			if !currentStatus.Targets[i].StateChangedAt.IsZero() {
+				uptime := time.Since(currentStatus.Targets[i].StateChangedAt)
+				currentStatus.Targets[i].CurrentUptime = formatUptime(uptime)
+			} else {
+				// If no state change timestamp, set it to now (for existing records)
+				currentStatus.Targets[i].StateChangedAt = now
+				currentStatus.Targets[i].CurrentUptime = "1 sec"
+			}
+
 			found = true
 			break
 		}
@@ -1195,12 +1338,14 @@ func updateTargetStatus(zone, hostname, ip, probeType string, enabled bool) {
 
 	if !found {
 		newTarget := TargetStatus{
-			Zone:        zone,
-			Hostname:    hostname,
-			IP:          ip,
-			Enabled:     enabled,
-			ProbeType:   probeType,
-			LastChecked: time.Now(),
+			Zone:           zone,
+			Hostname:       hostname,
+			IP:             ip,
+			Enabled:        enabled,
+			ProbeType:      probeType,
+			LastChecked:    now,
+			StateChangedAt: now,
+			CurrentUptime:  "1 sec",
 		}
 		currentStatus.Targets = append(currentStatus.Targets, newTarget)
 	}
@@ -1240,7 +1385,7 @@ func updateDNSResolution(zone, hostname string) {
 	found := false
 	for i, resolution := range currentStatus.Resolutions {
 		if resolution.Zone == zone && resolution.Hostname == hostname {
-			// Update primary data
+			// Always update primary data (empty list is valid for disabled records)
 			if primaryErr == nil {
 				currentStatus.Resolutions[i].Primary = DNSServerResult{
 					ResolvedIPs: primaryIPs,
@@ -1248,13 +1393,29 @@ func updateDNSResolution(zone, hostname string) {
 					Server:      primaryServer,
 					LastQueried: now,
 				}
+			} else {
+				// Clear primary data on error
+				currentStatus.Resolutions[i].Primary = DNSServerResult{
+					ResolvedIPs: []string{},
+					TTL:         0,
+					Server:      primaryServer,
+					LastQueried: now,
+				}
 			}
 
-			// Update recursor data
+			// Always update recursor data (empty list is valid for disabled records)
 			if recursorErr == nil {
 				currentStatus.Resolutions[i].Recursor = DNSServerResult{
 					ResolvedIPs: recursorIPs,
 					TTL:         recursorTTL,
+					Server:      recursorServer,
+					LastQueried: now,
+				}
+			} else {
+				// Clear recursor data on error
+				currentStatus.Resolutions[i].Recursor = DNSServerResult{
+					ResolvedIPs: []string{},
+					TTL:         0,
 					Server:      recursorServer,
 					LastQueried: now,
 				}
@@ -1273,7 +1434,7 @@ func updateDNSResolution(zone, hostname string) {
 			LastQueried: now,
 		}
 
-		// Set primary data
+		// Always set primary data (empty list is valid for disabled records)
 		if primaryErr == nil {
 			newResolution.Primary = DNSServerResult{
 				ResolvedIPs: primaryIPs,
@@ -1281,13 +1442,27 @@ func updateDNSResolution(zone, hostname string) {
 				Server:      primaryServer,
 				LastQueried: now,
 			}
+		} else {
+			newResolution.Primary = DNSServerResult{
+				ResolvedIPs: []string{},
+				TTL:         0,
+				Server:      primaryServer,
+				LastQueried: now,
+			}
 		}
 
-		// Set recursor data
+		// Always set recursor data (empty list is valid for disabled records)
 		if recursorErr == nil {
 			newResolution.Recursor = DNSServerResult{
 				ResolvedIPs: recursorIPs,
 				TTL:         recursorTTL,
+				Server:      recursorServer,
+				LastQueried: now,
+			}
+		} else {
+			newResolution.Recursor = DNSServerResult{
+				ResolvedIPs: []string{},
+				TTL:         0,
 				Server:      recursorServer,
 				LastQueried: now,
 			}

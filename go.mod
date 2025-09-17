@@ -8,6 +8,7 @@ require (
 	github.com/go-resty/resty v1.8.0
 	github.com/gorilla/websocket v1.5.1
 	github.com/kardianos/service v1.2.4
+	github.com/miekg/dns v1.1.62
 	github.com/oilbeater/go-ping v0.0.0-20200413021620-332b7197c5b5
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
@@ -17,6 +18,9 @@ require (
 require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
+	golang.org/x/mod v0.18.0 // indirect
 	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/sync v0.7.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/tools v0.22.0 // indirect
 )

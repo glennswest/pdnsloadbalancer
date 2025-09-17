@@ -22,6 +22,9 @@ import "strings"
 import "net"
 import "sync"
 import "github.com/gorilla/websocket"
+import "github.com/miekg/dns"
+import "os/exec"
+import "context"
  
 
 type program struct{}
@@ -72,15 +75,35 @@ type LogEntry struct {
 	Message   string    `json:"message"`
 }
 
+type DNSServerResult struct {
+	ResolvedIPs []string  `json:"resolvedIPs"`
+	TTL         int       `json:"ttl"`
+	Server      string    `json:"server"`
+	LastQueried time.Time `json:"lastQueried"`
+}
+
+type DNSResolution struct {
+	Hostname    string            `json:"hostname"`
+	Zone        string            `json:"zone"`
+	Primary     DNSServerResult   `json:"primary"`     // PowerDNS Authoritative (port 54)
+	Recursor    DNSServerResult   `json:"recursor"`    // PowerDNS Recursor (port 53)
+	LastQueried time.Time         `json:"lastQueried"`
+}
+
 type StatusData struct {
-	Targets []TargetStatus `json:"targets"`
-	Logs    []LogEntry     `json:"logs"`
+	Targets     []TargetStatus  `json:"targets"`
+	Logs        []LogEntry      `json:"logs"`
+	Resolutions []DNSResolution `json:"resolutions"`
 }
 
 // Global state for web GUI
 var (
 	statusMutex   sync.RWMutex
-	currentStatus StatusData
+	currentStatus StatusData = StatusData{
+		Targets:     make([]TargetStatus, 0),
+		Logs:        make([]LogEntry, 0),
+		Resolutions: make([]DNSResolution, 0),
+	}
 	wsClients     = make(map[*websocket.Conn]bool)
 	wsClientsMutex sync.RWMutex
 	upgrader      = websocket.Upgrader{
@@ -218,6 +241,158 @@ func performProbe(ip string, config ProbeConfig) bool {
 	default:
 		return performPingProbe(ip, config.Timeout)
 	}
+}
+
+func queryDNSServer(hostname, server string) ([]string, int, error) {
+	// Remove trailing dot if present
+	hostname = strings.TrimSuffix(hostname, ".")
+
+	c := dns.Client{Timeout: 5 * time.Second}
+	m := dns.Msg{}
+	m.SetQuestion(dns.Fqdn(hostname), dns.TypeA)
+
+	r, _, err := c.Exchange(&m, server)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if r.Rcode != dns.RcodeSuccess {
+		return nil, 0, fmt.Errorf("DNS error code: %d", r.Rcode)
+	}
+
+	var ips []string
+	var ttl int = 300 // default TTL
+
+	for _, ans := range r.Answer {
+		if a, ok := ans.(*dns.A); ok {
+			ips = append(ips, a.A.String())
+			ttl = int(a.Hdr.Ttl)
+		}
+	}
+
+	if len(ips) > 0 {
+		return ips, ttl, nil
+	}
+
+	return nil, 0, fmt.Errorf("no A records found")
+}
+
+func resolveDNSWithTTL(hostname string) ([]string, int, error) {
+	// Remove trailing dot if present
+	hostname = strings.TrimSuffix(hostname, ".")
+
+	c := dns.Client{Timeout: 5 * time.Second}
+	m := dns.Msg{}
+	m.SetQuestion(dns.Fqdn(hostname), dns.TypeA)
+
+	// Try local PowerDNS Authoritative server first (port 54), then recursor (port 53), then public DNS servers
+	var dnsServers []string
+	if strings.HasPrefix(MyConfig.Baseurl, "http://") {
+		// Extract hostname from PowerDNS API URL
+		apiURL := strings.TrimPrefix(MyConfig.Baseurl, "http://")
+		if colonIndex := strings.Index(apiURL, ":"); colonIndex != -1 {
+			dnsHost := apiURL[:colonIndex]
+			// Try authoritative server first (port 54), then recursor (port 53)
+			dnsServers = append(dnsServers, dnsHost+":54", dnsHost+":53")
+		}
+	}
+	// Add public DNS servers as fallback
+	dnsServers = append(dnsServers, "8.8.8.8:53", "1.1.1.1:53", "208.67.222.222:53")
+
+	for _, server := range dnsServers {
+		r, _, err := c.Exchange(&m, server)
+		if err != nil {
+			continue
+		}
+
+		if r.Rcode != dns.RcodeSuccess {
+			continue
+		}
+
+		var ips []string
+		var ttl int = 300 // default TTL
+
+		for _, ans := range r.Answer {
+			if a, ok := ans.(*dns.A); ok {
+				ips = append(ips, a.A.String())
+				ttl = int(a.Hdr.Ttl)
+			}
+		}
+
+		if len(ips) > 0 {
+			return ips, ttl, nil
+		}
+	}
+
+	return nil, 0, fmt.Errorf("failed to resolve %s", hostname)
+}
+
+func clearRecursorCache(hostname string) error {
+	// Use rec_control to clear cache for specific hostname
+	cmd := fmt.Sprintf("rec_control wipe-cache %s", hostname)
+
+	// Execute the command with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	execCmd := exec.CommandContext(ctx, "sh", "-c", cmd)
+	output, err := execCmd.Output()
+	if err != nil {
+		// Check if it's a timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("timeout clearing recursor cache for %s", hostname)
+		}
+		// Check if it's a command not found error
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("rec_control command failed for %s: exit code %d, stderr: %s",
+				hostname, exitErr.ExitCode(), string(exitErr.Stderr))
+		}
+		return fmt.Errorf("failed to clear recursor cache for %s: %v", hostname, err)
+	}
+
+	outputStr := strings.TrimSpace(string(output))
+	log.Printf("Cleared recursor cache for %s: %s", hostname, outputStr)
+
+	// Check if the output indicates success (rec_control typically reports what was wiped)
+	if !strings.Contains(outputStr, "wiped") && outputStr != "" {
+		log.Printf("Warning: Unexpected output from rec_control for %s: %s", hostname, outputStr)
+	}
+
+	return nil
+}
+
+func clearRecursorZoneCache(zone string) error {
+	// Clear cache for entire zone
+	cmd := fmt.Sprintf("rec_control wipe-cache %s", zone)
+
+	// Execute the command with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	execCmd := exec.CommandContext(ctx, "sh", "-c", cmd)
+	output, err := execCmd.Output()
+	if err != nil {
+		// Check if it's a timeout
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("timeout clearing recursor cache for zone %s", zone)
+		}
+		// Check if it's a command not found error
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("rec_control command failed for zone %s: exit code %d, stderr: %s",
+				zone, exitErr.ExitCode(), string(exitErr.Stderr))
+		}
+		return fmt.Errorf("failed to clear recursor cache for zone %s: %v", zone, err)
+	}
+
+	outputStr := strings.TrimSpace(string(output))
+	log.Printf("Cleared recursor cache for zone %s: %s", zone, outputStr)
+
+	// Check if the output indicates success
+	if !strings.Contains(outputStr, "wiped") && outputStr != "" {
+		log.Printf("Warning: Unexpected output from rec_control for zone %s: %s", zone, outputStr)
+	}
+
+	return nil
 }
 
 
@@ -368,6 +543,9 @@ func handle_load_balance(domain string,name string,count int,records string){
        if (changed == true){
            send_update(domain,name,records)
        }
+
+       // Update DNS resolution status for this hostname
+       go updateDNSResolution(domain, name)
 }
 
 func send_update(domain string,name string,records string) string{
@@ -383,6 +561,19 @@ func send_update(domain string,name string,records string) string{
                        "X-API-KEY": MyConfig.ApiPassword}).
            SetBody(data).
            Patch("/api/v1/servers/localhost/zones/" + domain)
+
+        // If the update was successful, clear the recursor cache
+        if resp.StatusCode() >= 200 && resp.StatusCode() < 300 {
+            // Clear cache for the specific hostname that was updated
+            go func() {
+                if err := clearRecursorCache(name); err != nil {
+                    log.Printf("Warning: Failed to clear recursor cache for %s: %v", name, err)
+                }
+            }()
+        } else {
+            log.Printf("DNS update failed for %s, status: %d, not clearing cache", name, resp.StatusCode())
+        }
+
         // Explore response object
         /*
         fmt.Println("Response Info:")
@@ -461,7 +652,7 @@ const htmlTemplate = `
         }
         .dashboard {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 20px;
             padding: 20px;
         }
@@ -581,6 +772,63 @@ const htmlTemplate = `
             background: #f8d7da;
             color: #721c24;
         }
+        .dns-resolution {
+            font-family: monospace;
+        }
+        .resolved-ip {
+            margin-left: 20px;
+            padding: 2px 6px;
+            margin: 2px 0;
+            background: #e9ecef;
+            border-radius: 3px;
+            font-size: 0.9em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .ttl-badge {
+            font-size: 0.7em;
+            padding: 1px 4px;
+            background: #17a2b8;
+            color: white;
+            border-radius: 8px;
+        }
+        .dns-server-section {
+            margin-left: 20px;
+            margin-bottom: 10px;
+            border-left: 2px solid #dee2e6;
+            padding-left: 10px;
+        }
+        .dns-server-title {
+            font-weight: bold;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+            color: #495057;
+        }
+        .primary-server {
+            border-left-color: #28a745;
+        }
+        .recursor-server {
+            border-left-color: #007bff;
+        }
+        .server-badge {
+            font-size: 0.6em;
+            padding: 1px 3px;
+            color: white;
+            border-radius: 6px;
+            margin-left: 5px;
+        }
+        .primary-badge {
+            background: #28a745;
+        }
+        .recursor-badge {
+            background: #007bff;
+        }
+        @media (max-width: 1024px) {
+            .dashboard {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
         @media (max-width: 768px) {
             .dashboard {
                 grid-template-columns: 1fr;
@@ -603,6 +851,15 @@ const htmlTemplate = `
                 <div class="panel-content">
                     <div id="targetTree" class="tree-view">
                         <div>Loading targets...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">Current DNS Resolution</div>
+                <div class="panel-content">
+                    <div id="dnsTree" class="dns-resolution">
+                        <div>Loading DNS resolutions...</div>
                     </div>
                 </div>
             </div>
@@ -649,6 +906,7 @@ const htmlTemplate = `
             ws.onmessage = function(event) {
                 const data = JSON.parse(event.data);
                 updateTargets(data.targets);
+                updateDNSResolutions(data.resolutions);
                 updateLogs(data.logs);
             };
 
@@ -716,6 +974,63 @@ const htmlTemplate = `
             }
 
             targetTree.innerHTML = html;
+        }
+
+        function updateDNSResolutions(resolutions) {
+            const dnsTree = document.getElementById('dnsTree');
+            const zones = {};
+
+            // Group resolutions by zone
+            resolutions.forEach(resolution => {
+                if (!zones[resolution.zone]) {
+                    zones[resolution.zone] = [];
+                }
+                zones[resolution.zone].push(resolution);
+            });
+
+            let html = '';
+            Object.keys(zones).sort().forEach(zone => {
+                html += '<div class="zone">📁 ' + zone + '</div>';
+                zones[zone].sort((a, b) => a.hostname.localeCompare(b.hostname)).forEach(resolution => {
+                    html += '<div class="hostname">🔍 ' + resolution.hostname + '</div>';
+
+                    // Primary (Authoritative) Server
+                    if (resolution.primary && resolution.primary.resolvedIPs && resolution.primary.resolvedIPs.length > 0) {
+                        html += '<div class="dns-server-section primary-server">';
+                        html += '<div class="dns-server-title">Primary (Authoritative)<span class="server-badge primary-badge">:54</span></div>';
+                        resolution.primary.resolvedIPs.forEach(ip => {
+                            html += '<div class="resolved-ip">';
+                            html += '<span>🌐 ' + ip + '</span>';
+                            html += '<span class="ttl-badge">TTL: ' + resolution.primary.ttl + 's</span>';
+                            html += '</div>';
+                        });
+                        const primaryQueried = new Date(resolution.primary.lastQueried).toLocaleTimeString();
+                        html += '<div style="font-size: 0.7em; color: #6c757d;">Last queried: ' + primaryQueried + '</div>';
+                        html += '</div>';
+                    }
+
+                    // Recursor Server
+                    if (resolution.recursor && resolution.recursor.resolvedIPs && resolution.recursor.resolvedIPs.length > 0) {
+                        html += '<div class="dns-server-section recursor-server">';
+                        html += '<div class="dns-server-title">Recursor (Client View)<span class="server-badge recursor-badge">:53</span></div>';
+                        resolution.recursor.resolvedIPs.forEach(ip => {
+                            html += '<div class="resolved-ip">';
+                            html += '<span>🌐 ' + ip + '</span>';
+                            html += '<span class="ttl-badge">TTL: ' + resolution.recursor.ttl + 's</span>';
+                            html += '</div>';
+                        });
+                        const recursorQueried = new Date(resolution.recursor.lastQueried).toLocaleTimeString();
+                        html += '<div style="font-size: 0.7em; color: #6c757d;">Last queried: ' + recursorQueried + '</div>';
+                        html += '</div>';
+                    }
+                });
+            });
+
+            if (html === '') {
+                html = '<div>No DNS resolutions available</div>';
+            }
+
+            dnsTree.innerHTML = html;
         }
 
         function updateLogs(logs) {
@@ -890,6 +1205,106 @@ func updateTargetStatus(zone, hostname, ip, probeType string, enabled bool) {
 		currentStatus.Targets = append(currentStatus.Targets, newTarget)
 	}
 	statusMutex.Unlock()
+
+	// Broadcast update outside of mutex lock to prevent deadlock
+	broadcastUpdate()
+}
+
+func updateDNSResolution(zone, hostname string) {
+	now := time.Now()
+
+	// Get DNS host from config
+	var dnsHost string
+	if strings.HasPrefix(MyConfig.Baseurl, "http://") {
+		apiURL := strings.TrimPrefix(MyConfig.Baseurl, "http://")
+		if colonIndex := strings.Index(apiURL, ":"); colonIndex != -1 {
+			dnsHost = apiURL[:colonIndex]
+		}
+	}
+
+	if dnsHost == "" {
+		log.Printf("Could not extract DNS host from config for %s", hostname)
+		return
+	}
+
+	// Query both primary (authoritative) and recursor
+	primaryServer := dnsHost + ":54"
+	recursorServer := dnsHost + ":53"
+
+	primaryIPs, primaryTTL, primaryErr := queryDNSServer(hostname, primaryServer)
+	recursorIPs, recursorTTL, recursorErr := queryDNSServer(hostname, recursorServer)
+
+	statusMutex.Lock()
+
+	// Find existing resolution or create new one
+	found := false
+	for i, resolution := range currentStatus.Resolutions {
+		if resolution.Zone == zone && resolution.Hostname == hostname {
+			// Update primary data
+			if primaryErr == nil {
+				currentStatus.Resolutions[i].Primary = DNSServerResult{
+					ResolvedIPs: primaryIPs,
+					TTL:         primaryTTL,
+					Server:      primaryServer,
+					LastQueried: now,
+				}
+			}
+
+			// Update recursor data
+			if recursorErr == nil {
+				currentStatus.Resolutions[i].Recursor = DNSServerResult{
+					ResolvedIPs: recursorIPs,
+					TTL:         recursorTTL,
+					Server:      recursorServer,
+					LastQueried: now,
+				}
+			}
+
+			currentStatus.Resolutions[i].LastQueried = now
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		newResolution := DNSResolution{
+			Zone:        zone,
+			Hostname:    hostname,
+			LastQueried: now,
+		}
+
+		// Set primary data
+		if primaryErr == nil {
+			newResolution.Primary = DNSServerResult{
+				ResolvedIPs: primaryIPs,
+				TTL:         primaryTTL,
+				Server:      primaryServer,
+				LastQueried: now,
+			}
+		}
+
+		// Set recursor data
+		if recursorErr == nil {
+			newResolution.Recursor = DNSServerResult{
+				ResolvedIPs: recursorIPs,
+				TTL:         recursorTTL,
+				Server:      recursorServer,
+				LastQueried: now,
+			}
+		}
+
+		currentStatus.Resolutions = append(currentStatus.Resolutions, newResolution)
+	}
+
+	statusMutex.Unlock()
+
+	// Log any errors
+	if primaryErr != nil {
+		log.Printf("Primary DNS resolution failed for %s: %v", hostname, primaryErr)
+	}
+	if recursorErr != nil {
+		log.Printf("Recursor DNS resolution failed for %s: %v", hostname, recursorErr)
+	}
 
 	// Broadcast update outside of mutex lock to prevent deadlock
 	broadcastUpdate()

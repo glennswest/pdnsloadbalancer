@@ -13,6 +13,7 @@ import "strconv"
 import "log"
 import "gopkg.in/natefinch/lumberjack.v2"
 import "github.com/kardianos/service"
+import "github.com/coreos/go-systemd/v22/daemon"
 import "github.com/BurntSushi/toml"
 import "net/http"
 import "crypto/tls"
@@ -28,6 +29,8 @@ type program struct{}
 func (p *program) Start(s service.Service) error {
         ReadConfig()
 	startWebServer()
+	// Notify systemd that we're ready
+	daemon.SdNotify(false, daemon.SdNotifyReady)
 	go p.run()
 	return nil
 }
@@ -85,6 +88,12 @@ var (
 			return true // Allow all origins for simplicity
 		},
 	}
+	// Goroutine limiting
+	maxConcurrentChecks = 10
+	checkSemaphore     = make(chan struct{}, maxConcurrentChecks)
+	// Record-level locking to prevent race conditions
+	recordLocks = make(map[string]*sync.Mutex)
+	recordLocksMutex sync.RWMutex
 )
 
 type ProbeConfig struct {
@@ -297,7 +306,28 @@ func getdomainlist() string{
         return(zones)
 }
 
+// Get or create a mutex for this specific record
+func getRecordMutex(recordKey string) *sync.Mutex {
+	recordLocksMutex.Lock()
+	defer recordLocksMutex.Unlock()
+
+	if recordLocks[recordKey] == nil {
+		recordLocks[recordKey] = &sync.Mutex{}
+	}
+	return recordLocks[recordKey]
+}
+
 func handle_load_balance(domain string,name string,count int,records string){
+	// Acquire semaphore to limit concurrent health checks
+	checkSemaphore <- struct{}{}
+	defer func() { <-checkSemaphore }()
+
+	// Use record-specific locking to prevent race conditions
+	recordKey := domain + ":" + name
+	recordMutex := getRecordMutex(recordKey)
+	recordMutex.Lock()
+	defer recordMutex.Unlock()
+
        recs := gjson.Get(records,"records")
        changed := false
 
@@ -372,12 +402,15 @@ func send_update(domain string,name string,records string) string{
 func DoWork(){
 
      for {
+        // Notify systemd watchdog that we're alive
+        daemon.SdNotify(false, daemon.SdNotifyWatchdog)
+
         domainsjs := getdomainlist()
         domains := gjson.Parse(domainsjs).Array()
         for _,domain := range domains{
               process_domain(domain.String())
               }
-       time.Sleep(10 * time.Second)
+       time.Sleep(20 * time.Second)
         }
 }
 
@@ -807,8 +840,6 @@ func broadcastUpdate() {
 }
 
 func addLogEntry(hostname, ip, oldState, newState, probeType string) {
-	statusMutex.Lock()
-
 	logEntry := LogEntry{
 		Timestamp: time.Now(),
 		Hostname:  hostname,
@@ -819,14 +850,16 @@ func addLogEntry(hostname, ip, oldState, newState, probeType string) {
 		Message:   fmt.Sprintf("%s - %s changed state from %s to %s (%s probe)", hostname, ip, oldState, newState, probeType),
 	}
 
+	statusMutex.Lock()
 	currentStatus.Logs = append(currentStatus.Logs, logEntry)
 
 	// Keep only last 100 log entries
 	if len(currentStatus.Logs) > 100 {
 		currentStatus.Logs = currentStatus.Logs[len(currentStatus.Logs)-100:]
 	}
-
 	statusMutex.Unlock()
+
+	// Broadcast update outside of mutex lock to prevent deadlock
 	broadcastUpdate()
 }
 
@@ -856,8 +889,9 @@ func updateTargetStatus(zone, hostname, ip, probeType string, enabled bool) {
 		}
 		currentStatus.Targets = append(currentStatus.Targets, newTarget)
 	}
-
 	statusMutex.Unlock()
+
+	// Broadcast update outside of mutex lock to prevent deadlock
 	broadcastUpdate()
 }
 

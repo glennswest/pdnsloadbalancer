@@ -776,6 +776,27 @@ func handle_load_balance(domain string,name string,count int,records string){
            updateTargetStatus(domain, name, ip, probeConfig.Type, isHealthy, stateChanged)
        }
 
+       // Failsafe: if all hosts are disabled, enable the first one
+       // This ensures DNS queries always return at least one IP
+       allDisabled := true
+       for idx := range recs.Array() {
+           dsname := "records." + strconv.Itoa(idx) + ".disabled"
+           if gjson.Get(records, dsname).String() == "false" {
+               allDisabled = false
+               break
+           }
+       }
+
+       if allDisabled && len(recs.Array()) > 0 {
+           firstIP := gjson.Get(recs.Array()[0].String(), "content").String()
+           log.Printf("%s - all hosts unavailable, enabling first entry %s as failsafe", name, firstIP)
+           addLogEntry(name, firstIP, "disabled", "enabled (failsafe)", probeConfig.Type)
+           records, _ = sjson.SetRaw(records, "records.0.disabled", "false")
+           changed = true
+           // Update target status for the failsafe-enabled host
+           updateTargetStatus(domain, name, firstIP, probeConfig.Type, true, true)
+       }
+
        if (changed == true){
            send_update(domain,name,records)
        }

@@ -131,6 +131,7 @@ pdnsloadbalancer/
 - **HTTPS Probes**: Certificate verification disabled for simplicity
 - **Backward Compatibility**: Existing configurations default to ping probes
 - **Privileges**: Requires root or `cap_net_raw` capability for ICMP ping
+- **Failsafe Mode**: When all hosts in a load-balanced record fail health checks, the first entry is automatically enabled to ensure DNS queries always return at least one IP address
 
 ## PowerDNS Integration
 
@@ -368,6 +369,19 @@ sudo journalctl -u ploadb -f
 ```
 
 ## Change History
+
+### Version 2.1 (2026-01-05) - Failsafe Mode
+**Feature Addition**: Automatic failsafe when all hosts are unavailable
+
+#### New Features
+- **Failsafe Mode**: When all hosts in a load-balanced record fail health checks, the first entry is automatically enabled
+- This ensures DNS queries always return at least one IP address, preventing complete service outages
+- Failsafe activations are logged with "(failsafe)" suffix in state change messages
+
+#### Implementation Changes
+- `ploadb/ploadb.go:779-798`: Added failsafe logic in `handle_load_balance()` function
+- After health checking all IPs, checks if all are disabled
+- If all hosts unavailable, enables first entry and logs the failsafe activation
 
 ### Version 2.0 (2025-09-15) - Configurable Health Probes
 **Major Feature Addition**: Multi-protocol health checking support

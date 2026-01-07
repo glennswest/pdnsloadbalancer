@@ -788,8 +788,8 @@ func send_update(domain string,name string,records string) string{
 // Create a Resty Client
        data, _  := sjson.SetRaw("","rrsets.0",records)
        data, _ = sjson.Set(data,"rrsets.0.changetype", "replace")
-       // Set TTL to 30 seconds for load balanced records
-       data, _ = sjson.Set(data,"rrsets.0.ttl", 30)
+       // Set TTL to 5 seconds for load balanced records
+       data, _ = sjson.Set(data,"rrsets.0.ttl", 5)
        fmt.Printf("send_update: %s\n",data)
        client := resty.New()
        client.SetHostURL(MyConfig.Baseurl)

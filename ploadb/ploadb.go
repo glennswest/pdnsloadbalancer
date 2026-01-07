@@ -880,7 +880,7 @@ func DoWork(){
         // Clean up targets that are no longer active
         cleanupStaleTargets(activeTargets)
 
-       time.Sleep(20 * time.Second)
+       time.Sleep(10 * time.Second)
         }
 }
 

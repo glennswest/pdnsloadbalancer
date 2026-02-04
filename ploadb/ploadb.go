@@ -742,22 +742,56 @@ func handle_load_balance(domain string,name string,count int,records string){
        comment := gjson.Get(records, "comments.0.content").String()
        probeConfig := parseProbeConfig(comment)
 
+       // Probe all hosts first to determine overall health before applying changes
+       type probeResult struct {
+           ip      string
+           healthy bool
+       }
+       probeResults := make([]probeResult, len(recs.Array()))
+       allFailed := true
        for idx, host := range(recs.Array()){
-           ipa := gjson.Get(host.String(),"content")
-           ip := ipa.String()
-
-           // Perform the appropriate probe based on configuration
+           ip := gjson.Get(host.String(),"content").String()
            isHealthy := performProbe(ip, probeConfig)
+           probeResults[idx] = probeResult{ip: ip, healthy: isHealthy}
+           if isHealthy {
+               allFailed = false
+           }
+       }
 
+       // If all probes failed, find the last host that was enabled (most recently alive)
+       // to keep as the failsafe host. Falls back to first host if all were already disabled.
+       failsafeIdx := 0
+       if allFailed {
+           for idx := range recs.Array() {
+               dsname := "records." + strconv.Itoa(idx) + ".disabled"
+               if gjson.Get(records, dsname).String() == "false" {
+                   failsafeIdx = idx
+               }
+           }
+       }
+
+       // Apply state changes based on probe results
+       for idx := range recs.Array() {
+           ip := probeResults[idx].ip
            dsname := "records." + strconv.Itoa(idx) + ".disabled"
            cstate := gjson.Get(records,dsname).String()
 
-           // Check if state is changing
+           // Determine desired state: if all failed, failsafe keeps last alive host enabled
+           shouldBeEnabled := probeResults[idx].healthy
+           if allFailed && idx == failsafeIdx {
+               shouldBeEnabled = true
+           }
+
            stateChanged := false
-           if isHealthy {
+           if shouldBeEnabled {
                if (cstate == "true"){
-                   log.Printf("%s - %s changed state from disabled to enabled (%s probe)", name, ip, probeConfig.Type)
-                   addLogEntry(name, ip, "disabled", "enabled", probeConfig.Type)
+                   if allFailed {
+                       log.Printf("%s - all hosts unavailable, enabling %s as failsafe (%s probe)", name, ip, probeConfig.Type)
+                       addLogEntry(name, ip, "disabled", "enabled (failsafe)", probeConfig.Type)
+                   } else {
+                       log.Printf("%s - %s changed state from disabled to enabled (%s probe)", name, ip, probeConfig.Type)
+                       addLogEntry(name, ip, "disabled", "enabled", probeConfig.Type)
+                   }
                    stateChanged = true
                    changed = true
                }
@@ -772,29 +806,8 @@ func handle_load_balance(domain string,name string,count int,records string){
                records, _ = sjson.SetRaw(records,dsname,"true")
            }
 
-           // Update target status for web GUI with state change information
-           updateTargetStatus(domain, name, ip, probeConfig.Type, isHealthy, stateChanged)
-       }
-
-       // Failsafe: if all hosts are disabled, enable the first one
-       // This ensures DNS queries always return at least one IP
-       allDisabled := true
-       for idx := range recs.Array() {
-           dsname := "records." + strconv.Itoa(idx) + ".disabled"
-           if gjson.Get(records, dsname).String() == "false" {
-               allDisabled = false
-               break
-           }
-       }
-
-       if allDisabled && len(recs.Array()) > 0 {
-           firstIP := gjson.Get(recs.Array()[0].String(), "content").String()
-           log.Printf("%s - all hosts unavailable, enabling first entry %s as failsafe", name, firstIP)
-           addLogEntry(name, firstIP, "disabled", "enabled (failsafe)", probeConfig.Type)
-           records, _ = sjson.SetRaw(records, "records.0.disabled", "false")
-           changed = true
-           // Update target status for the failsafe-enabled host
-           updateTargetStatus(domain, name, firstIP, probeConfig.Type, true, true)
+           // Update target status for web GUI
+           updateTargetStatus(domain, name, ip, probeConfig.Type, shouldBeEnabled, stateChanged)
        }
 
        if (changed == true){

@@ -131,7 +131,7 @@ pdnsloadbalancer/
 - **HTTPS Probes**: Certificate verification disabled for simplicity
 - **Backward Compatibility**: Existing configurations default to ping probes
 - **Privileges**: Requires root or `cap_net_raw` capability for ICMP ping
-- **Failsafe Mode**: When all hosts in a load-balanced record fail health checks, the first entry is automatically enabled to ensure DNS queries always return at least one IP address
+- **Failsafe Mode**: When all hosts in a load-balanced record fail health checks, the last enabled (most recently alive) host is kept active to ensure DNS queries always return at least one IP address
 
 ## PowerDNS Integration
 
@@ -370,18 +370,33 @@ sudo journalctl -u ploadb -f
 
 ## Change History
 
+### Version 2.2 (2026-02-04) - Failsafe Fix
+**Bug Fix**: Fixed failsafe probe flip-flop and improved failsafe host selection
+
+#### Bug Fixes
+- **Probe Flip-Flop**: Fixed bug where failsafe would enable a host, then the next probe cycle would disable it, causing an endless enable/disable cycle with unnecessary API calls every cycle
+- **Probe-First Architecture**: All hosts are now probed first and results collected before applying any state changes, ensuring a single coherent decision per cycle
+- **Last Alive Host**: Failsafe now keeps the last host that was enabled (most recently alive) rather than always picking the first host, improving recovery behavior after reboots
+
+#### Implementation Changes
+- `ploadb/ploadb.go:745-806`: Rewrote `handle_load_balance()` to use two-pass approach
+- First pass: probe all hosts and collect results
+- Determine failsafe host index by finding last enabled host
+- Second pass: apply state changes based on overall probe results
+- When failsafe is already active and all hosts remain down, no state changes occur and no unnecessary `send_update` API calls are made
+
 ### Version 2.1 (2026-01-05) - Failsafe Mode
 **Feature Addition**: Automatic failsafe when all hosts are unavailable
 
 #### New Features
-- **Failsafe Mode**: When all hosts in a load-balanced record fail health checks, the first entry is automatically enabled
+- **Failsafe Mode**: When all hosts in a load-balanced record fail health checks, the last enabled host is kept active
 - This ensures DNS queries always return at least one IP address, preventing complete service outages
 - Failsafe activations are logged with "(failsafe)" suffix in state change messages
 
 #### Implementation Changes
 - `ploadb/ploadb.go:779-798`: Added failsafe logic in `handle_load_balance()` function
 - After health checking all IPs, checks if all are disabled
-- If all hosts unavailable, enables first entry and logs the failsafe activation
+- If all hosts unavailable, enables last alive entry and logs the failsafe activation
 
 ### Version 2.0 (2025-09-15) - Configurable Health Probes
 **Major Feature Addition**: Multi-protocol health checking support
